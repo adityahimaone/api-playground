@@ -13,11 +13,12 @@ import {
   createKVPair,
   HistoryEntry,
 } from '@/lib/entities';
-import { resolveVariables, resolveUrlWithParams, ResolveContext } from '@/lib/services/variable-resolver.service';
+import { resolveVariables, resolveUrlWithParams, ResolveContext, extractVariables, getMissingVariables, previewResolved } from '@/lib/services/variable-resolver.service';
 import { resolveAuth } from '@/lib/services/auth-resolver.service';
 import { executeRequest } from '@/lib/services/request-executor.service';
 import { requestRepository } from '@/lib/repositories/request.repository';
 import { historyRepository } from '@/lib/repositories/history.repository';
+import { variableRepository } from '@/lib/repositories/variable.repository';
 import { useState, useEffect, useRef } from 'react';
 
 export default function RequestBuilder() {
@@ -30,6 +31,7 @@ export default function RequestBuilder() {
   const { addEntry } = useHistoryStore();
   const [reqTab, setReqTab] = useState<'params' | 'headers' | 'body' | 'auth'>('params');
   const sendFnRef = useRef<() => void>(() => {});
+  const [urlPreview, setUrlPreview] = useState<{ resolved: string; missing: string[] } | null>(null);
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
 
@@ -39,6 +41,22 @@ export default function RequestBuilder() {
     ...(request || {} as RequestEntity),
     ...activeTab.draftState,
   } as RequestEntity : null;
+
+  // Realtime URL preview — debounce variable resolution
+  useEffect(() => {
+    if (!merged?.url || !merged.url.includes('{{')) {
+      setUrlPreview(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      const globalVars = await variableRepository.getByScope('global');
+      const activeEnvId = useUIStore.getState().activeEnvId;
+      const envVars = activeEnvId ? await variableRepository.getByScope('environment', activeEnvId) : [];
+      const ctx: ResolveContext = { globalVariables: globalVars, environmentVariables: envVars };
+      setUrlPreview(previewResolved(merged.url!, ctx));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [merged?.url]);
 
   const update = (changes: Partial<RequestEntity>) => {
     if (activeTab) updateDraft(activeTab.id, changes);
@@ -50,8 +68,19 @@ export default function RequestBuilder() {
     setResponse(null);
 
     try {
-      // Resolve variables
-      const resolvedUrl = resolveUrlWithParams(merged.url, merged.params || [], {});
+      // Load variables from all scopes
+      const globalVars = await variableRepository.getByScope('global');
+      const activeEnvId = useUIStore.getState().activeEnvId;
+      const envVars = activeEnvId ? await variableRepository.getByScope('environment', activeEnvId) : [];
+      // TODO: collection vars when collection-level variables are implemented
+
+      const varContext: ResolveContext = {
+        globalVariables: globalVars,
+        environmentVariables: envVars,
+      };
+
+      // Resolve variables in URL
+      const resolvedUrl = resolveUrlWithParams(merged.url, merged.params || [], varContext);
       
       // Resolve auth
       const authResult = resolveAuth(activeTab!.requestId, {
@@ -61,20 +90,20 @@ export default function RequestBuilder() {
         activeEnvId: null,
       });
 
-      // Build headers
+      // Build headers with resolved variables
       const headers: Record<string, string> = {};
       for (const h of (merged.headers || [])) {
         if (h.enabled && h.key.trim()) {
-          headers[h.key] = resolveVariables(h.value, {});
+          headers[resolveVariables(h.key, varContext)] = resolveVariables(h.value, varContext);
         }
       }
       // Merge auth headers
       Object.assign(headers, authResult.headers);
 
-      // Build body
+      // Build body with resolved variables
       let body: string | undefined;
       if (merged.body?.mode !== 'none' && merged.body?.content) {
-        body = resolveVariables(merged.body.content, {});
+        body = resolveVariables(merged.body.content, varContext);
       }
 
       const result = await executeRequest({
@@ -213,6 +242,30 @@ export default function RequestBuilder() {
           </span>
         )}
       </div>
+
+      {/* ═══ URL Variable Preview ═══ */}
+      {urlPreview && (
+        <div className="px-4 pb-2">
+          {urlPreview.missing.length > 0 ? (
+            <div className="flex items-center gap-1.5 text-[11px]">
+              <span style={{ color: 'var(--warning)' }}>⚠</span>
+              <span style={{ color: 'var(--text-muted)' }}>Resolved:</span>
+              <code className="text-[11px] px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
+                {urlPreview.resolved}
+              </code>
+              <span style={{ color: 'var(--danger)' }}>— missing: {urlPreview.missing.join(', ')}</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 text-[11px]">
+              <span style={{ color: 'var(--success)' }}>✓</span>
+              <span style={{ color: 'var(--text-muted)' }}>Resolved:</span>
+              <code className="text-[11px] px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
+                {urlPreview.resolved}
+              </code>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Request name */}
       <div className="px-4 pb-2">
