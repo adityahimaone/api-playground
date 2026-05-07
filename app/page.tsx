@@ -16,6 +16,7 @@ import { nodeRepository } from '@/lib/repositories/node.repository';
 import { requestRepository } from '@/lib/repositories/request.repository';
 import { responseRepository } from '@/lib/repositories/response.repository';
 import { historyRepository } from '@/lib/repositories/history.repository';
+import { createRequestEntity } from '@/lib/entities';
 
 import { useState, useEffect, useCallback } from 'react';
 
@@ -30,6 +31,12 @@ export default function Home() {
   const [showVarsModal, setShowVarsModal] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+
+  const handleNewRequest = async () => {
+    const req = useRequestStore.getState().createRequest('New Request');
+    await requestRepository.create(req);
+    useUIStore.getState().openTab(req.id);
+  };
 
   // ═══ Load data from Dexie on mount ═══
   useEffect(() => {
@@ -204,66 +211,90 @@ export default function Home() {
       )}
 
       {/* ═══ TABS BAR ═══ */}
-      {tabs.length > 0 && (
-        <div
-          className="flex items-center shrink-0 overflow-x-auto"
-          style={{
-            borderBottom: '1px solid var(--border-subtle)',
-            background: 'var(--bg-sidebar)',
-            minHeight: '34px',
-          }}
-        >
-          {tabs.map((tab) => {
-            const req = getRequest(tab.requestId);
-            return (
-              <div
-                key={tab.id}
-                className="flex items-center gap-1.5 px-3 py-1.5 cursor-pointer border-r shrink-0"
+      <div
+        className="flex items-center shrink-0 overflow-x-auto"
+        style={{
+          borderBottom: '1px solid var(--border-subtle)',
+          background: 'var(--bg-sidebar)',
+          minHeight: '36px',
+        }}
+      >
+        {tabs.map((tab) => {
+          const req = getRequest(tab.requestId);
+          const isActive = tab.id === activeTabId;
+          return (
+            <div
+              key={tab.id}
+              className="flex items-center gap-1.5 px-3 py-2 cursor-pointer shrink-0 relative group"
+              style={{
+                background: isActive ? 'var(--bg-card)' : 'transparent',
+              }}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {/* Active indicator bar at bottom */}
+              {isActive && (
+                <div
+                  className="absolute bottom-0 left-0 right-0 h-[2px]"
+                  style={{ background: METHOD_COLORS[req?.method || 'GET'] || 'var(--accent-primary)' }}
+                />
+              )}
+              <span
+                className="text-[9px] font-bold px-1 py-0.5 rounded"
                 style={{
-                  background: tab.id === activeTabId ? 'var(--bg-card)' : 'transparent',
-                  borderBottom: tab.id === activeTabId ? '2px solid var(--accent-primary)' : '2px solid transparent',
-                  borderColor: 'var(--border-subtle)',
+                  background: (METHOD_COLORS[req?.method || 'GET'] || '#666') + '22',
+                  color: METHOD_COLORS[req?.method || 'GET'] || '#666',
                 }}
-                onClick={() => setActiveTab(tab.id)}
               >
+                {req?.method || 'GET'}
+              </span>
+              <span
+                className="text-[11px] truncate max-w-[120px]"
+                style={{ color: isActive ? 'var(--text-primary)' : 'var(--text-muted)' }}
+              >
+                {req?.name || tab.draftState?.name || 'Untitled'}
+              </span>
+              {tab.isDirty && (
                 <span
-                  className="text-[9px] font-bold px-1 py-0.5 rounded"
                   style={{
-                    background: (METHOD_COLORS[req?.method || 'GET'] || '#666') + '22',
-                    color: METHOD_COLORS[req?.method || 'GET'] || '#666',
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '50%',
+                    background: 'var(--warning)',
+                    flexShrink: 0,
                   }}
-                >
-                  {req?.method || 'GET'}
-                </span>
-                <span
-                  className="text-[11px] truncate max-w-[120px]"
-                  style={{ color: tab.id === activeTabId ? 'var(--text-primary)' : 'var(--text-muted)' }}
-                >
-                  {req?.name || tab.draftState?.name || 'Untitled'}
-                </span>
-                {tab.isDirty && (
-                  <span
-                    style={{
-                      width: '6px',
-                      height: '6px',
-                      borderRadius: '50%',
-                      background: 'var(--warning)',
-                      flexShrink: 0,
-                    }}
-                  />
-                )}
-                <button
-                  onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
-                  className="btn-icon ml-0.5"
-                  style={{ width: '16px', height: '16px', fontSize: '9px', color: 'var(--text-faint)' }}
-                >
-                  ✕
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
+                />
+              )}
+              <button
+                onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
+                className="opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{ width: '16px', height: '16px', fontSize: '9px', color: 'var(--text-faint)', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                ✕
+              </button>
+            </div>
+          );
+        })}
+
+        {/* Add new request button */}
+        <button
+          onClick={handleNewRequest}
+          className="flex items-center justify-center shrink-0 transition-all"
+          style={{
+            width: '32px',
+            height: '36px',
+            color: 'var(--text-faint)',
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: '14px',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.color = 'var(--accent-primary)')}
+          onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-faint)')}
+          title="New Request (Ctrl+T)"
+        >
+          +
+        </button>
+      </div>
 
       {/* ═══ MAIN LAYOUT ═══ */}
       <div className="flex flex-1 min-h-0">
