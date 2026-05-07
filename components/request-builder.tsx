@@ -238,14 +238,14 @@ function AuthEditor() {
 
   return (
     <div className="space-y-3">
-      <div className="flex gap-1.5">
-        {(['none', 'bearer', 'basic'] as const).map(type => (
+      <div className="flex gap-1.5 flex-wrap">
+        {(['none', 'bearer', 'basic', 'apikey'] as const).map(type => (
           <button
             key={type}
             onClick={() => updateRequest({ auth: { ...auth, type } })}
             className={`pill ${auth.type === type ? 'active' : ''}`}
           >
-            {type === 'none' ? 'No Auth' : type === 'bearer' ? 'Bearer Token' : 'Basic Auth'}
+            {type === 'none' ? 'No Auth' : type === 'bearer' ? 'Bearer Token' : type === 'basic' ? 'Basic Auth' : 'API Key'}
           </button>
         ))}
       </div>
@@ -274,6 +274,36 @@ function AuthEditor() {
             onChange={e => updateRequest({ auth: { ...auth, password: e.target.value } })}
             placeholder="Password"
             className="input text-[12px]"
+          />
+        </div>
+      )}
+
+      {auth.type === 'apikey' && (
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <input
+              value={auth.apiKeyName}
+              onChange={e => updateRequest({ auth: { ...auth, apiKeyName: e.target.value } })}
+              placeholder="Key name (e.g. X-API-Key)"
+              className="input text-[12px] flex-1"
+              style={{ fontFamily: 'var(--font-mono)' }}
+            />
+            <select
+              value={auth.apiKeyIn}
+              onChange={e => updateRequest({ auth: { ...auth, apiKeyIn: e.target.value as 'header' | 'query' } })}
+              className="input text-[11px]"
+              style={{ padding: '6px 8px', cursor: 'pointer', width: '90px' }}
+            >
+              <option value="header">Header</option>
+              <option value="query">Query</option>
+            </select>
+          </div>
+          <input
+            value={auth.apiKey}
+            onChange={e => updateRequest({ auth: { ...auth, apiKey: e.target.value } })}
+            placeholder="API Key value (supports {{variable}})"
+            className="input text-[12px]"
+            style={{ fontFamily: 'var(--font-mono)' }}
           />
         </div>
       )}

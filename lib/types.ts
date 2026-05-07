@@ -17,12 +17,27 @@ export interface ApiRequest {
   bodyType: 'none' | 'json' | 'form-data' | 'x-www-form-urlencoded' | 'raw';
   body: string;
   formData: KVPair[];
-  auth: {
-    type: 'none' | 'bearer' | 'basic';
-    token: string;
-    username: string;
-    password: string;
-  };
+  auth: AuthConfig;
+  savedResponses: SavedResponse[];
+}
+
+export interface AuthConfig {
+  type: 'none' | 'bearer' | 'basic' | 'apikey';
+  token: string;       // bearer token
+  username: string;    // basic auth
+  password: string;    // basic auth
+  apiKey: string;      // api key value
+  apiKeyName: string;  // api key header/query param name
+  apiKeyIn: 'header' | 'query'; // where to put api key
+}
+
+export interface SavedResponse {
+  id: string;
+  name: string;           // e.g. "[Fail] Full Name"
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  body: string;
 }
 
 export interface ApiResponse {
@@ -90,6 +105,11 @@ export const METHOD_COLORS: Record<HttpMethod, string> = {
   OPTIONS: 'var(--method-options)',
 };
 
+export const METHOD_BG: Record<HttpMethod, string> = {
+  GET: '#3b82f615', POST: '#22c55e15', PUT: '#f9731615', PATCH: '#eab30815',
+  DELETE: '#ef444415', HEAD: '#8b5cf615', OPTIONS: '#6b728015',
+};
+
 const genId = () => Math.random().toString(36).slice(2, 10);
 
 export function createKVPair(key = '', value = '', enabled = true): KVPair {
@@ -98,16 +118,11 @@ export function createKVPair(key = '', value = '', enabled = true): KVPair {
 
 export function createRequest(name = 'New Request'): ApiRequest {
   return {
-    id: genId(),
-    name,
-    method: 'GET',
-    url: '',
-    params: [createKVPair()],
-    headers: [createKVPair()],
-    bodyType: 'none',
-    body: '',
-    formData: [createKVPair()],
-    auth: { type: 'none', token: '', username: '', password: '' },
+    id: genId(), name, method: 'GET', url: '',
+    params: [createKVPair()], headers: [createKVPair()],
+    bodyType: 'none', body: '', formData: [createKVPair()],
+    auth: { type: 'none', token: '', username: '', password: '', apiKey: '', apiKeyName: '', apiKeyIn: 'header' },
+    savedResponses: [],
   };
 }
 
@@ -120,10 +135,16 @@ export function createRequestItem(request: ApiRequest): CollectionRequestItem {
 }
 
 export function createWorkspace(name: string): Workspace {
-  return {
-    id: genId(),
-    name,
-    collections: [],
-    createdAt: new Date().toISOString(),
-  };
+  return { id: genId(), name, collections: [], createdAt: new Date().toISOString() };
+}
+
+export function createSavedResponse(name: string, status: number, statusText: string, headers: Record<string, string>, body: string): SavedResponse {
+  return { id: genId(), name, status, statusText, headers, body };
+}
+
+/** Detect path variables like :id, :name in URL */
+export function extractPathVariables(url: string): string[] {
+  const matches = url.match(/:([a-zA-Z_][\w]*)/g);
+  if (!matches) return [];
+  return Array.from(new Set(matches.map(m => m.slice(1))));
 }

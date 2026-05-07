@@ -9,14 +9,17 @@ import { usePlaygroundStore } from '@/lib/store';
 import { useState, useEffect } from 'react';
 
 export default function Home() {
-  const { response, loading, workspaces, activeWorkspaceId, setActiveWorkspaceId } = usePlaygroundStore();
+  const {
+    response, loading, workspaces, activeWorkspaceId, setActiveWorkspaceId,
+    environments, activeEnvId, setActiveEnvId,
+    activeRequest
+  } = usePlaygroundStore();
   const [showVarsModal, setShowVarsModal] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [colorTheme, setColorTheme] = useState<'light' | 'dark'>('light');
   const [authEnabled, setAuthEnabled] = useState(false);
 
-  // Load theme + init workspace from localStorage
   useEffect(() => {
     const saved = localStorage.getItem('api-theme') as 'light' | 'dark' | null;
     if (saved) {
@@ -25,8 +28,6 @@ export default function Home() {
     }
     const savedAuth = localStorage.getItem('api-feature-auth');
     setAuthEnabled(savedAuth === 'true');
-
-    // Auto-select first workspace if none selected
     if (!activeWorkspaceId && workspaces.length > 0) {
       setActiveWorkspaceId(workspaces[0].id);
     }
@@ -45,29 +46,70 @@ export default function Home() {
     localStorage.setItem('api-feature-auth', String(next));
   };
 
+  const savedResponsesCount = activeRequest.savedResponses?.length || 0;
+
   return (
     <div className="h-full flex flex-col" style={{ background: 'var(--bg-page)' }}>
-      {/* Top bar */}
+      {/* ═══ TOPBAR ═══ */}
       <nav
         className="flex items-center justify-between px-4 h-11 shrink-0"
         style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-card)' }}
       >
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-3">
+          {/* App logo */}
           <div
             className="w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold"
             style={{ background: 'var(--accent-primary)', color: '#000' }}
           >
             AP
           </div>
-          <span className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>API Playground</span>
+          <span className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>
+            API Playground
+          </span>
+
+          {/* Workspace indicator */}
+          {activeWorkspaceId && (
+            <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: 'var(--bg-hover)', color: 'var(--text-faint)' }}>
+              {workspaces.find(w => w.id === activeWorkspaceId)?.name || ''}
+            </span>
+          )}
         </div>
+
         <div className="flex items-center gap-1.5">
+          {/* Environment dropdown */}
+          <select
+            value={activeEnvId || ''}
+            onChange={e => setActiveEnvId(e.target.value || null)}
+            className="input text-[11px]"
+            style={{
+              padding: '4px 8px',
+              minWidth: '120px',
+              cursor: 'pointer',
+              background: activeEnvId ? 'var(--accent-primary-soft)' : 'var(--bg-hover)',
+              border: activeEnvId ? '1px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
+            }}
+          >
+            <option value="">No Environment</option>
+            {environments.map(env => (
+              <option key={env.id} value={env.id}>{env.name}</option>
+            ))}
+          </select>
+
+          {/* Saved responses badge */}
+          {savedResponsesCount > 0 && (
+            <span
+              className="text-[10px] px-2 py-1 rounded-full font-medium"
+              style={{ background: 'var(--info)', color: '#fff' }}
+              title={`${savedResponsesCount} saved responses for this request`}
+            >
+              {savedResponsesCount} saved
+            </span>
+          )}
+
           <button onClick={() => setShowVarsModal(true)} className="btn-ghost text-[11px] py-1 px-2.5">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v18m-6-6l6 6 6-6"/></svg>
             Variables
           </button>
           <button onClick={() => setShowSaveModal(true)} className="btn-ghost text-[11px] py-1 px-2.5">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
             Save
           </button>
           <button onClick={toggleTheme} className="btn-icon" title="Toggle theme" style={{ width: '28px', height: '28px' }}>
@@ -98,9 +140,7 @@ export default function Home() {
             <button
               onClick={toggleAuth}
               className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
-              style={{
-                background: authEnabled ? 'var(--accent-primary)' : 'var(--border-default)',
-              }}
+              style={{ background: authEnabled ? 'var(--accent-primary)' : 'var(--border-default)' }}
             >
               <span
                 className="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform"
@@ -114,7 +154,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* Main layout */}
+      {/* ═══ MAIN LAYOUT ═══ */}
       <div className="flex flex-1 min-h-0">
         <Sidebar />
         <div className="flex-1 flex flex-col min-w-0">

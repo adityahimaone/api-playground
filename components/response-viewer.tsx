@@ -2,10 +2,13 @@
 
 import { usePlaygroundStore } from '@/lib/store';
 import { useState } from 'react';
+import { SavedResponse } from '@/lib/types';
 
 export default function ResponseViewer() {
-  const { response, loading, activeResponseTab, setActiveResponseTab } = usePlaygroundStore();
+  const { response, loading, activeResponseTab, setActiveResponseTab, activeRequest, viewSavedResponse } = usePlaygroundStore();
   const [copied, setCopied] = useState(false);
+  const [showExamples, setShowExamples] = useState(false);
+  const savedResponses = activeRequest.savedResponses || [];
 
   if (loading) {
     return (
@@ -50,20 +53,72 @@ export default function ResponseViewer() {
           {response.status} {response.statusText}
         </span>
         <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-          {response.time}ms
+          {response.time > 0 ? `${response.time}ms` : 'saved'}
         </span>
         <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
           {formatSize(response.size)}
         </span>
+
+        {/* Saved responses dropdown */}
+        {savedResponses.length > 0 && (
+          <div className="relative ml-2">
+            <button
+              onClick={() => setShowExamples(!showExamples)}
+              className="text-[11px] font-medium px-2.5 py-1 rounded-lg flex items-center gap-1"
+              style={{ background: 'var(--info)', color: '#fff', border: 'none', cursor: 'pointer' }}
+            >
+              📋 Examples ({savedResponses.length})
+              <span style={{ fontSize: '9px' }}>{showExamples ? '▴' : '▾'}</span>
+            </button>
+            {showExamples && (
+              <div
+                className="absolute left-0 top-full mt-1 z-50 rounded-lg overflow-hidden"
+                style={{
+                  background: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  boxShadow: 'var(--shadow-modal)',
+                  maxHeight: '300px',
+                  overflowY: 'auto',
+                  minWidth: '280px',
+                }}
+              >
+                {savedResponses.map((sr: SavedResponse) => {
+                  const srColor = sr.status >= 200 && sr.status < 300 ? 'var(--success)'
+                    : sr.status >= 400 ? 'var(--danger)' : 'var(--warning)';
+                  return (
+                    <button
+                      key={sr.id}
+                      onClick={() => { viewSavedResponse(sr); setShowExamples(false); }}
+                      className="w-full text-left px-3 py-2 flex items-center gap-2 transition-all"
+                      style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
+                      onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <span
+                        className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0"
+                        style={{ background: `${srColor}22`, color: srColor }}
+                      >
+                        {sr.status}
+                      </span>
+                      <span className="text-[11px] truncate" style={{ color: 'var(--text-secondary)' }}>
+                        {sr.name}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="ml-auto">
           <button
             onClick={copyBody}
-            className={`text-[11px] font-medium px-2.5 py-1 rounded-lg transition-all ${copied ? '' : ''}`}
+            className="text-[11px] font-medium px-2.5 py-1 rounded-lg transition-all"
             style={{
               background: copied ? 'var(--success)' : 'var(--bg-hover)',
               color: copied ? '#fff' : 'var(--text-muted)',
-              border: 'none',
-              cursor: 'pointer',
+              border: 'none', cursor: 'pointer',
             }}
           >
             {copied ? '✓ Copied' : 'Copy Body'}
@@ -112,7 +167,7 @@ export default function ResponseViewer() {
         {activeResponseTab === 'meta' && (
           <div className="space-y-2">
             <MetaRow label="Status" value={`${response.status} ${response.statusText}`} color={statusColor} />
-            <MetaRow label="Time" value={`${response.time}ms`} />
+            <MetaRow label="Time" value={response.time > 0 ? `${response.time}ms` : 'N/A (saved response)'} />
             <MetaRow label="Size" value={formatSize(response.size)} />
             <MetaRow label="Headers" value={`${Object.keys(response.headers).length} headers`} />
           </div>
