@@ -23,17 +23,17 @@ export interface ApiRequest {
 
 export interface AuthConfig {
   type: 'none' | 'bearer' | 'basic' | 'apikey';
-  token: string;       // bearer token
-  username: string;    // basic auth
-  password: string;    // basic auth
-  apiKey: string;      // api key value
-  apiKeyName: string;  // api key header/query param name
-  apiKeyIn: 'header' | 'query'; // where to put api key
+  token: string;
+  username: string;
+  password: string;
+  apiKey: string;
+  apiKeyName: string;
+  apiKeyIn: 'header' | 'query';
 }
 
 export interface SavedResponse {
   id: string;
-  name: string;           // e.g. "[Fail] Full Name"
+  name: string;
   status: number;
   statusText: string;
   headers: Record<string, string>;
@@ -49,8 +49,26 @@ export interface ApiResponse {
   size: number;
 }
 
-// ── Tree-based collection items ──
+// ── Multi-tab ──
+export interface Tab {
+  id: string;
+  request: ApiRequest;
+  name: string;
+  hasChanges: boolean;
+}
 
+// ── Context menu ──
+export interface ContextMenuState {
+  visible: boolean;
+  x: number;
+  y: number;
+  targetType: 'collection' | 'folder' | 'request';
+  targetId: string;
+  collectionId: string;
+  parentFolderId: string | null;
+}
+
+// ── Tree-based collection items ──
 export interface CollectionFolder {
   type: 'folder';
   id: string;
@@ -71,6 +89,7 @@ export interface Collection {
   name: string;
   items: CollectionItem[];
   variables: KVPair[];
+  auth?: AuthConfig; // collection-level auth (inherited by children)
 }
 
 export interface Workspace {
@@ -147,4 +166,26 @@ export function extractPathVariables(url: string): string[] {
   const matches = url.match(/:([a-zA-Z_][\w]*)/g);
   if (!matches) return [];
   return Array.from(new Set(matches.map(m => m.slice(1))));
+}
+
+/** Deep clone a request (for duplicate, tabs, etc) */
+export function cloneRequest(req: ApiRequest): ApiRequest {
+  return JSON.parse(JSON.stringify(req));
+}
+
+/** Flatten tree items for search */
+export function flattenItems(items: CollectionItem[]): Array<{ item: CollectionItem; collectionId: string; path: string }> {
+  const result: Array<{ item: CollectionItem; collectionId: string; path: string }> = [];
+  const walk = (arr: CollectionItem[], path: string) => {
+    for (const item of arr) {
+      if (item.type === 'folder') {
+        result.push({ item, collectionId: '', path: path ? `${path} / ${item.name}` : item.name });
+        walk(item.items, path ? `${path} / ${item.name}` : item.name);
+      } else {
+        result.push({ item, collectionId: '', path: path ? `${path} / ${item.request.name}` : item.request.name });
+      }
+    }
+  };
+  walk(items, '');
+  return result;
 }

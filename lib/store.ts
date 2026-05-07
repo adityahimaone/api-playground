@@ -2,42 +2,64 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import {
   ApiRequest, ApiResponse, Workspace, Collection, CollectionItem, Environment, HistoryEntry,
-  createRequest, createKVPair, createWorkspace, createFolder, createRequestItem, KVPair, extractPathVariables
+  Tab, ContextMenuState,
+  createRequest, createKVPair, createWorkspace, createFolder, createRequestItem, cloneRequest, KVPair, extractPathVariables
 } from './types';
 import { importPostmanCollection, isPostmanCollection } from './postman-import';
-import {
-  addItem, addItemToFolder, removeItem, renameItem, findItem
-} from './collection-tree';
+import { addItem, addItemToFolder, removeItem, renameItem, duplicateItem, findItem, moveItem } from './collection-tree';
 
 interface PlaygroundStore {
+  // Active request (derived from active tab)
   activeRequest: ApiRequest;
   response: ApiResponse | null;
   loading: boolean;
+
+  // Multi-tab
+  tabs: Tab[];
+  activeTabId: string | null;
+
+  // Workspaces
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
+
+  // History
   history: HistoryEntry[];
+
+  // Environments
   environments: Environment[];
   activeEnvId: string | null;
+
+  // Global variables
   globalVariables: KVPair[];
+
+  // UI
   sidebarTab: 'collections' | 'history' | 'variables';
   activeResponseTab: 'body' | 'headers' | 'meta';
   activeCollectionId: string | null;
   searchQuery: string;
+  contextMenu: ContextMenuState;
 
-  // Workspace actions
+  // ── Workspace ──
   addWorkspace: (name: string) => void;
   deleteWorkspace: (id: string) => void;
   renameWorkspace: (id: string, name: string) => void;
   setActiveWorkspaceId: (id: string | null) => void;
 
-  // Request actions
+  // ── Multi-tab ──
+  openTab: (request: ApiRequest, name?: string) => string;
+  closeTab: (tabId: string) => void;
+  setActiveTab: (tabId: string) => void;
+  updateTabRequest: (req: Partial<ApiRequest>) => void;
+  syncActiveTab: () => void;
+
+  // ── Request ──
   updateRequest: (req: Partial<ApiRequest>) => void;
   setActiveRequest: (req: ApiRequest) => void;
   setResponse: (res: ApiResponse | null) => void;
   setLoading: (l: boolean) => void;
   sendRequest: () => Promise<void>;
 
-  // Collection actions
+  // ── Collection ──
   addCollection: (name: string) => void;
   deleteCollection: (id: string) => void;
   renameCollection: (id: string, name: string) => void;
@@ -46,11 +68,17 @@ interface PlaygroundStore {
   deleteFromCollectionItem: (collectionId: string, itemId: string) => void;
   addFolderToCollection: (collectionId: string, parentFolderId: string | null, name: string) => void;
   renameCollectionItem: (collectionId: string, itemId: string, name: string) => void;
+  duplicateCollectionItem: (collectionId: string, itemId: string) => void;
+  moveCollectionItem: (collectionId: string, itemId: string, targetFolderId: string | null, targetIndex: number) => void;
 
-  // Saved response actions
+  // ── Context menu ──
+  showContextMenu: (x: number, y: number, targetType: 'collection' | 'folder' | 'request', targetId: string, collectionId: string, parentFolderId?: string | null) => void;
+  hideContextMenu: () => void;
+
+  // ── Saved responses ──
   viewSavedResponse: (savedResp: any) => void;
 
-  // Collection variables
+  // ── Collection variables ──
   setActiveCollectionId: (id: string | null) => void;
   setCollectionVariables: (collectionId: string, vars: KVPair[]) => void;
   addCollectionVariable: (collectionId: string) => void;
@@ -58,33 +86,33 @@ interface PlaygroundStore {
   toggleCollectionVariable: (collectionId: string, varId: string) => void;
   deleteCollectionVariable: (collectionId: string, varId: string) => void;
 
-  // History
+  // ── History ──
   clearHistory: () => void;
   loadFromHistory: (id: string) => void;
 
-  // Environments
+  // ── Environments ──
   addEnvironment: (name: string) => void;
   deleteEnvironment: (id: string) => void;
   updateEnvironment: (id: string, env: Partial<Environment>) => void;
   setActiveEnvId: (id: string | null) => void;
 
-  // Global variables
+  // ── Global variables ──
   setGlobalVariables: (vars: KVPair[]) => void;
   addGlobalVariable: () => void;
   updateGlobalVariable: (id: string, field: 'key' | 'value', val: string) => void;
   toggleGlobalVariable: (id: string) => void;
   deleteGlobalVariable: (id: string) => void;
 
-  // UI
+  // ── UI ──
   setSidebarTab: (tab: 'collections' | 'history' | 'variables') => void;
   setActiveResponseTab: (tab: 'body' | 'headers' | 'meta') => void;
   setSearchQuery: (q: string) => void;
 
-  // Variable resolution
+  // ── Variables ──
   resolveVariables: (text: string) => string;
   getActiveVariables: () => KVPair[];
 
-  // Import / Export
+  // ── Import / Export ──
   exportWorkspace: (workspaceId: string) => string;
   exportAllWorkspaces: () => string;
   importWorkspace: (json: string) => boolean;
@@ -114,33 +142,36 @@ function migrateState(state: any): any {
         ...ws,
         collections: (ws.collections || []).map((c: any) => {
           if (c.items) {
-            // Already tree-based — migrate requests to include savedResponses if missing
-            return {
-              ...c,
-              items: migrateItems(c.items),
-            };
+            return { ...c, items: migrateItems(c.items) };
           }
-          // Old flat format
           const items: any[] = (c.requests || []).map((r: any) => ({
-            type: 'request',
-            id: r.id || genId(),
-            request: { ...r, savedResponses: r.savedResponses || [] },
+            type: 'request', id: r.id || genId(),
+            request: { ...r, savedResponses: r.savedResponses || [], auth: r.auth || { type: 'none', token: '', username: '', password: '', apiKey: '', apiKeyName: '', apiKeyIn: 'header' } },
           }));
           return { ...c, items, requests: undefined };
         }),
       })),
+      tabs: state.tabs || [],
+      activeTabId: state.activeTabId || null,
+      contextMenu: state.contextMenu || { visible: false, x: 0, y: 0, targetType: 'request', targetId: '', collectionId: '', parentFolderId: null },
     };
   }
-  return { ...state, workspaces: [createWorkspace('My Workspace')], activeWorkspaceId: state.activeWorkspaceId || null };
+  return {
+    ...state,
+    workspaces: [createWorkspace('My Workspace')],
+    activeWorkspaceId: state.activeWorkspaceId || null,
+    tabs: state.tabs || [],
+    activeTabId: state.activeTabId || null,
+    contextMenu: state.contextMenu || { visible: false, x: 0, y: 0, targetType: 'request', targetId: '', collectionId: '', parentFolderId: null },
+  };
 }
 
 function migrateItems(items: any[]): any[] {
   return items.map(item => {
-    if (item.type === 'folder') {
-      return { ...item, items: migrateItems(item.items || []) };
-    }
+    if (item.type === 'folder') return { ...item, items: migrateItems(item.items || []) };
     if (item.type === 'request') {
-      return { ...item, request: { ...item.request, savedResponses: item.request.savedResponses || [] } };
+      const req = item.request;
+      return { ...item, request: { ...req, savedResponses: req.savedResponses || [], auth: req.auth || { type: 'none', token: '', username: '', password: '', apiKey: '', apiKeyName: '', apiKeyIn: 'header' } } };
     }
     return item;
   });
@@ -152,6 +183,8 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
       activeRequest: createRequest(),
       response: null,
       loading: false,
+      tabs: [],
+      activeTabId: null,
       workspaces: [createWorkspace('My Workspace')],
       activeWorkspaceId: null,
       history: [],
@@ -162,7 +195,9 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
       sidebarTab: 'collections',
       activeResponseTab: 'body',
       searchQuery: '',
+      contextMenu: { visible: false, x: 0, y: 0, targetType: 'request', targetId: '', collectionId: '', parentFolderId: null },
 
+      // ═══ Workspace ═══
       addWorkspace: (name) => set((s) => {
         const ws = createWorkspace(name);
         return { workspaces: [...s.workspaces, ws], activeWorkspaceId: ws.id };
@@ -176,7 +211,77 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
       })),
       setActiveWorkspaceId: (id) => set({ activeWorkspaceId: id, activeCollectionId: null }),
 
-      updateRequest: (req) => set((s) => ({ activeRequest: { ...s.activeRequest, ...req } })),
+      // ═══ Multi-tab ═══
+      openTab: (request, name) => {
+        const tabId = genId();
+        const tab: Tab = {
+          id: tabId,
+          request: cloneRequest(request),
+          name: name || request.name || 'Untitled',
+          hasChanges: false,
+        };
+        set((s) => ({
+          tabs: [...s.tabs, tab],
+          activeTabId: tabId,
+          activeRequest: { ...tab.request },
+          response: null,
+        }));
+        return tabId;
+      },
+      closeTab: (tabId) => set((s) => {
+        const newTabs = s.tabs.filter(t => t.id !== tabId);
+        const newActiveId = s.activeTabId === tabId
+          ? (newTabs[newTabs.length - 1]?.id || null)
+          : s.activeTabId;
+        const activeTab = newTabs.find(t => t.id === newActiveId);
+        return {
+          tabs: newTabs,
+          activeTabId: newActiveId,
+          activeRequest: activeTab ? { ...activeTab.request } : s.activeRequest,
+          response: null,
+        };
+      }),
+      setActiveTab: (tabId) => set((s) => {
+        const tab = s.tabs.find(t => t.id === tabId);
+        if (!tab) return {};
+        return {
+          activeTabId: tabId,
+          activeRequest: { ...tab.request },
+          response: null,
+        };
+      }),
+      updateTabRequest: (req) => set((s) => {
+        const newActive = { ...s.activeRequest, ...req };
+        return {
+          activeRequest: newActive,
+          tabs: s.tabs.map(t => t.id === s.activeTabId
+            ? { ...t, request: { ...t.request, ...req }, hasChanges: true }
+            : t
+          ),
+        };
+      }),
+      syncActiveTab: () => set((s) => {
+        if (!s.activeTabId) return {};
+        return {
+          tabs: s.tabs.map(t => t.id === s.activeTabId
+            ? { ...t, request: { ...s.activeRequest }, hasChanges: false }
+            : t
+          ),
+        };
+      }),
+
+      // ═══ Request ═══
+      updateRequest: (req) => {
+        const state = get();
+        const newActive = { ...state.activeRequest, ...req };
+        set({
+          activeRequest: newActive,
+          tabs: state.tabs.map(t => t.id === state.activeTabId
+            ? { ...t, request: { ...t.request, ...req }, hasChanges: true }
+            : t
+          ),
+        });
+      },
       setActiveRequest: (req) => set({ activeRequest: req, response: null }),
       setResponse: (res) => set({ response: res }),
       setLoading: (l) => set({ loading: l }),
@@ -186,17 +291,14 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
         set({ loading: true, response: null });
         try {
           let resolvedUrl = resolveVariables(activeRequest.url);
-
-          // Path variable replacement (:param → value from params)
           const pathVars = extractPathVariables(resolvedUrl);
           if (pathVars.length > 0) {
-            const pathParams = activeRequest.params.filter(p => pathVars.includes(p.key.replace(/^:/, '')));
-            for (const pv of pathParams) {
-              resolvedUrl = resolvedUrl.replace(new RegExp(`:${pv.key}`, 'g'), resolveVariables(pv.value));
+            for (const pv of pathVars) {
+              const param = activeRequest.params.find(p => p.key === pv || p.key === `:${pv}`);
+              if (param) resolvedUrl = resolvedUrl.replace(new RegExp(`:${pv}\\b`, 'g'), resolveVariables(param.value));
             }
           }
 
-          // Query params (non-path)
           const queryParams = activeRequest.params.filter(p => p.enabled && p.key && !p.key.startsWith(':'));
           if (queryParams.length > 0) {
             const qs = new URLSearchParams(queryParams.map(p => [resolveVariables(p.key), resolveVariables(p.value)])).toString();
@@ -208,37 +310,27 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
             headers[resolveVariables(h.key)] = resolveVariables(h.value);
           });
 
-          // Auth
           const auth = activeRequest.auth;
           if (auth.type === 'bearer' && auth.token) {
             headers['Authorization'] = `Bearer ${resolveVariables(auth.token)}`;
           } else if (auth.type === 'basic' && auth.username) {
             headers['Authorization'] = `Basic ${btoa(`${resolveVariables(auth.username)}:${resolveVariables(auth.password)}`)}`;
           } else if (auth.type === 'apikey' && auth.apiKey && auth.apiKeyName) {
-            if (auth.apiKeyIn === 'header') {
-              headers[auth.apiKeyName] = resolveVariables(auth.apiKey);
-            } else {
-              resolvedUrl += (resolvedUrl.includes('?') ? '&' : '?') + `${auth.apiKeyName}=${encodeURIComponent(resolveVariables(auth.apiKey))}`;
-            }
+            if (auth.apiKeyIn === 'header') headers[auth.apiKeyName] = resolveVariables(auth.apiKey);
+            else resolvedUrl += (resolvedUrl.includes('?') ? '&' : '?') + `${auth.apiKeyName}=${encodeURIComponent(resolveVariables(auth.apiKey))}`;
           }
 
           let body: string | undefined;
           if (activeRequest.method !== 'GET' && activeRequest.method !== 'HEAD') {
             if (activeRequest.bodyType === 'json' || activeRequest.bodyType === 'raw') {
               body = resolveVariables(activeRequest.body);
-              if (activeRequest.bodyType === 'json' && !headers['Content-Type']) {
-                headers['Content-Type'] = 'application/json';
-              }
+              if (activeRequest.bodyType === 'json' && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
             } else if (activeRequest.bodyType === 'x-www-form-urlencoded') {
-              body = new URLSearchParams(
-                activeRequest.formData.filter(f => f.enabled && f.key).map(f => [resolveVariables(f.key), resolveVariables(f.value)])
-              ).toString();
+              body = new URLSearchParams(activeRequest.formData.filter(f => f.enabled && f.key).map(f => [resolveVariables(f.key), resolveVariables(f.value)])).toString();
               headers['Content-Type'] = 'application/x-www-form-urlencoded';
             } else if (activeRequest.bodyType === 'form-data') {
               const formObj: Record<string, string> = {};
-              activeRequest.formData.filter(f => f.enabled && f.key).forEach(f => {
-                formObj[resolveVariables(f.key)] = resolveVariables(f.value);
-              });
+              activeRequest.formData.filter(f => f.enabled && f.key).forEach(f => { formObj[resolveVariables(f.key)] = resolveVariables(f.value); });
               body = JSON.stringify({ __formData: formObj });
               headers['Content-Type'] = 'application/json';
             }
@@ -267,14 +359,11 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
           };
           set((s) => ({ history: [entry, ...s.history].slice(0, 200) }));
         } catch (err: any) {
-          set({
-            response: { status: 0, statusText: 'Network Error', headers: {}, body: err.message || 'Failed', time: 0, size: 0 },
-            loading: false,
-          });
+          set({ response: { status: 0, statusText: 'Network Error', headers: {}, body: err.message || 'Failed', time: 0, size: 0 }, loading: false });
         }
       },
 
-      // ---- Collection actions ----
+      // ═══ Collection ═══
       addCollection: (name) => set((s) => {
         const col: Collection = { id: genId(), name, items: [], variables: [] };
         return mapActiveWorkspaceCollections(s, cols => [...cols, col]);
@@ -287,9 +376,7 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
         mapActiveWorkspaceCollections(s, cols => cols.map(c => c.id === id ? { ...c, name } : c))
       ),
       saveToCollection: (collectionId, parentFolderId) => set((s) => {
-        const newReqItem = createRequestItem({
-          ...s.activeRequest, id: genId(), name: s.activeRequest.name || 'Untitled',
-        });
+        const newReqItem = createRequestItem({ ...s.activeRequest, id: genId(), name: s.activeRequest.name || 'Untitled' });
         return mapActiveWorkspaceCollections(s, cols =>
           cols.map(c => {
             if (c.id !== collectionId) return c;
@@ -299,13 +386,14 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
         );
       }),
       loadFromCollectionItem: (collectionId, itemId) => {
-        const { workspaces, activeWorkspaceId } = get();
+        const { workspaces, activeWorkspaceId, openTab } = get();
         const ws = workspaces.find(w => w.id === activeWorkspaceId);
         const col = ws?.collections.find(c => c.id === collectionId);
         if (!col) return;
         const item = findItem(col.items, itemId);
         if (item?.type === 'request') {
-          set({ activeRequest: { ...item.request }, response: null, activeCollectionId: collectionId });
+          openTab(item.request, item.request.name);
+          set({ activeCollectionId: collectionId });
         }
       },
       deleteFromCollectionItem: (collectionId, itemId) => set((s) =>
@@ -328,59 +416,68 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
           cols.map(c => c.id === collectionId ? { ...c, items: renameItem(c.items, itemId, name) } : c)
         )
       ),
+      duplicateCollectionItem: (collectionId, itemId) => set((s) =>
+        mapActiveWorkspaceCollections(s, cols =>
+          cols.map(c => c.id === collectionId ? { ...c, items: duplicateItem(c.items, itemId) } : c)
+        )
+      ),
+      moveCollectionItem: (collectionId, itemId, targetFolderId, targetIndex) => set((s) =>
+        mapActiveWorkspaceCollections(s, cols =>
+          cols.map(c => {
+            if (c.id !== collectionId) return c;
+            return { ...c, items: moveItem(c.items, itemId, targetFolderId, targetIndex) };
+          })
+        )
+      ),
 
-      // ---- Saved Response viewer ----
-      viewSavedResponse: (savedResp) => set((s) => ({
+      // ═══ Context menu ═══
+      showContextMenu: (x, y, targetType, targetId, collectionId, parentFolderId) => set({
+        contextMenu: { visible: true, x, y, targetType, targetId, collectionId, parentFolderId: parentFolderId ?? null },
+      }),
+      hideContextMenu: () => set({ contextMenu: { visible: false, x: 0, y: 0, targetType: 'request', targetId: '', collectionId: '', parentFolderId: null } }),
+
+      // ═══ Saved responses ═══
+      viewSavedResponse: (savedResp) => set({
         response: {
           status: savedResp.status, statusText: savedResp.statusText,
           headers: savedResp.headers, body: savedResp.body,
           time: 0, size: new Blob([savedResp.body]).size,
         },
         activeResponseTab: 'body',
-      })),
+      }),
 
-      // ---- Per-collection variables ----
+      // ═══ Collection variables ═══
       setActiveCollectionId: (id) => set({ activeCollectionId: id }),
       setCollectionVariables: (collectionId, vars) => set((s) =>
-        mapActiveWorkspaceCollections(s, cols =>
-          cols.map(c => c.id === collectionId ? { ...c, variables: vars } : c)
-        )
+        mapActiveWorkspaceCollections(s, cols => cols.map(c => c.id === collectionId ? { ...c, variables: vars } : c))
       ),
       addCollectionVariable: (collectionId) => set((s) =>
-        mapActiveWorkspaceCollections(s, cols =>
-          cols.map(c => c.id === collectionId ? { ...c, variables: [...c.variables, createKVPair()] } : c)
-        )
+        mapActiveWorkspaceCollections(s, cols => cols.map(c => c.id === collectionId ? { ...c, variables: [...c.variables, createKVPair()] } : c))
       ),
       updateCollectionVariable: (collectionId, varId, field, val) => set((s) =>
-        mapActiveWorkspaceCollections(s, cols =>
-          cols.map(c => c.id === collectionId
-            ? { ...c, variables: c.variables.map(v => v.id === varId ? { ...v, [field]: val } : v) }
-            : c)
-        )
+        mapActiveWorkspaceCollections(s, cols => cols.map(c => c.id === collectionId
+          ? { ...c, variables: c.variables.map(v => v.id === varId ? { ...v, [field]: val } : v) } : c))
       ),
       toggleCollectionVariable: (collectionId, varId) => set((s) =>
-        mapActiveWorkspaceCollections(s, cols =>
-          cols.map(c => c.id === collectionId
-            ? { ...c, variables: c.variables.map(v => v.id === varId ? { ...v, enabled: !v.enabled } : v) }
-            : c)
-        )
+        mapActiveWorkspaceCollections(s, cols => cols.map(c => c.id === collectionId
+          ? { ...c, variables: c.variables.map(v => v.id === varId ? { ...v, enabled: !v.enabled } : v) } : c))
       ),
       deleteCollectionVariable: (collectionId, varId) => set((s) =>
-        mapActiveWorkspaceCollections(s, cols =>
-          cols.map(c => c.id === collectionId
-            ? { ...c, variables: c.variables.filter(v => v.id !== varId) }
-            : c)
-        )
+        mapActiveWorkspaceCollections(s, cols => cols.map(c => c.id === collectionId
+          ? { ...c, variables: c.variables.filter(v => v.id !== varId) } : c))
       ),
 
-      // ---- History ----
+      // ═══ History ═══
       clearHistory: () => set({ history: [] }),
       loadFromHistory: (id) => {
         const entry = get().history.find(h => h.id === id);
-        if (entry) set({ activeRequest: { ...entry.request }, response: entry.response });
+        if (entry) {
+          const { openTab } = get();
+          openTab(entry.request, entry.request.name);
+        }
       },
 
-      // ---- Environments ----
+      // ═══ Environments ═══
       addEnvironment: (name) => set((s) => ({
         environments: [...s.environments, { id: genId(), name, variables: [createKVPair()] }],
       })),
@@ -393,7 +490,7 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
       })),
       setActiveEnvId: (id) => set({ activeEnvId: id }),
 
-      // ---- Global variables ----
+      // ═══ Global variables ═══
       setGlobalVariables: (vars) => set({ globalVariables: vars }),
       addGlobalVariable: () => set((s) => ({ globalVariables: [...s.globalVariables, createKVPair()] })),
       updateGlobalVariable: (id, field, val) => set((s) => ({
@@ -406,12 +503,12 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
         globalVariables: s.globalVariables.filter(v => v.id !== id),
       })),
 
-      // ---- UI ----
+      // ═══ UI ═══
       setSidebarTab: (tab) => set({ sidebarTab: tab }),
       setActiveResponseTab: (tab) => set({ activeResponseTab: tab }),
       setSearchQuery: (q) => set({ searchQuery: q }),
 
-      // ---- Variable resolution: Global < Environment < Collection ----
+      // ═══ Variable resolution ═══
       resolveVariables: (text) => {
         if (!text) return text;
         const { globalVariables, environments, activeEnvId, workspaces, activeWorkspaceId, activeCollectionId } = get();
@@ -441,7 +538,7 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
         ];
       },
 
-      // ---- Import / Export ----
+      // ═══ Import / Export ═══
       exportWorkspace: (workspaceId) => {
         const ws = get().workspaces.find(w => w.id === workspaceId);
         if (!ws) return '';
@@ -462,13 +559,11 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
       importWorkspace: (json) => {
         try {
           const data = JSON.parse(json);
-
-          // Postman import → adds to active workspace
           if (isPostmanCollection(json)) {
             const result = importPostmanCollection(json);
             if (!result.success) return false;
-            const { activeWorkspaceId, workspaces } = get();
-            let targetWsId = activeWorkspaceId || workspaces[0]?.id;
+            const { activeWorkspaceId: awId, workspaces: wss } = get();
+            let targetWsId = awId || wss[0]?.id;
             if (!targetWsId) {
               const ws = createWorkspace(data.info?.name || 'Imported from Postman');
               ws.collections = result.collections;
@@ -483,19 +578,18 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
             return true;
           }
 
-          // API Playground exports
           const extractCollections = (source: any[]): Collection[] =>
             source.map((c: any) => ({
               id: genId(), name: c.name || 'Imported',
               variables: c.variables || [],
               items: c.items || (c.requests || []).map((r: any) => ({
                 type: 'request', id: r.id || genId(),
-                request: { ...r, savedResponses: r.savedResponses || [] },
+                request: { ...r, savedResponses: r.savedResponses || [], auth: r.auth || { type: 'none', token: '', username: '', password: '', apiKey: '', apiKeyName: '', apiKeyIn: 'header' } },
               })),
             }));
 
-          const { activeWorkspaceId: awId, workspaces: wss } = get();
-          let targetWsId = awId || wss[0]?.id;
+          const { activeWorkspaceId: awId2, workspaces: wss2 } = get();
+          let targetWsId = awId2 || wss2[0]?.id;
 
           if (data._exportType === 'api-playground-workspace') {
             const imported = extractCollections(data.workspace?.collections || []);
@@ -505,9 +599,7 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
               set((s) => ({ workspaces: [...s.workspaces, ws], activeWorkspaceId: ws.id }));
             } else {
               set((s) => ({
-                workspaces: s.workspaces.map(w =>
-                  w.id === targetWsId ? { ...w, collections: [...w.collections, ...imported] } : w
-                ),
+                workspaces: s.workspaces.map(w => w.id === targetWsId ? { ...w, collections: [...w.collections, ...imported] } : w),
               }));
             }
             return true;
@@ -515,30 +607,25 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
 
           if (data._exportType === 'api-playground-workspaces') {
             const imported: Collection[] = [];
-            for (const w of (data.workspaces || [])) {
-              imported.push(...extractCollections(w.collections || []));
-            }
+            for (const w of (data.workspaces || [])) imported.push(...extractCollections(w.collections || []));
             if (!targetWsId && imported.length > 0) {
               const ws = createWorkspace('Imported');
               ws.collections = imported;
               set((s) => ({ workspaces: [...s.workspaces, ws], activeWorkspaceId: ws.id }));
             } else if (targetWsId) {
               set((s) => ({
-                workspaces: s.workspaces.map(w =>
-                  w.id === targetWsId ? { ...w, collections: [...w.collections, ...imported] } : w
-                ),
+                workspaces: s.workspaces.map(w => w.id === targetWsId ? { ...w, collections: [...w.collections, ...imported] } : w),
               }));
             }
             return true;
           }
-
           return false;
         } catch { return false; }
       },
     }),
     {
       name: 'api-playground-store',
-      version: 3,
+      version: 4,
       migrate: (persisted: any) => migrateState(persisted),
     }
   )
