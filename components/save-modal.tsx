@@ -1,36 +1,78 @@
 'use client';
 
-import { usePlaygroundStore } from '@/lib/store';
+import { useCollectionStore } from '@/lib/stores';
+import { useRequestStore } from '@/lib/stores';
+import { useUIStore } from '@/lib/stores';
+import { createKVPair, createRequestEntity } from '@/lib/entities';
+import { nodeRepository } from '@/lib/repositories/node.repository';
+import { requestRepository } from '@/lib/repositories/request.repository';
 import { useState } from 'react';
 
 export default function SaveToCollectionModal({ onClose }: { onClose: () => void }) {
-  const { workspaces, activeWorkspaceId, saveToCollection, addCollection, addWorkspace, activeRequest } = usePlaygroundStore();
-  const ws = workspaces.find(w => w.id === activeWorkspaceId);
-  const collections = ws?.collections || [];
-  const [selectedCol, setSelectedCol] = useState('');
-  const [newName, setNewName] = useState('');
+  const { treeNodes, rootIds, getNodeChildren, createNode } = useCollectionStore();
+  const { getRequest, createRequest } = useRequestStore();
+  const { tabs, activeTabId, saveDraft } = useUIStore();
+
+  const activeTab = tabs.find((t) => t.id === activeTabId);
+  const [selectedCollectionId, setSelectedCollectionId] = useState('');
+  const [newCollectionName, setNewCollectionName] = useState('');
   const [creating, setCreating] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  const handleSave = () => {
-    if (creating && newName.trim()) {
-      usePlaygroundStore.getState().addCollection(newName.trim());
-      const updatedWs = usePlaygroundStore.getState().workspaces.find(w => w.id === activeWorkspaceId);
-      const newCol = updatedWs?.collections[updatedWs.collections.length - 1];
-      if (newCol) {
-        saveToCollection(newCol.id);
-        setSaved(true);
-        setTimeout(() => { onClose(); }, 800);
-      }
-    } else if (selectedCol) {
-      saveToCollection(selectedCol);
-      setSaved(true);
-      setTimeout(() => { onClose(); }, 800);
+  // Get collections (root nodes of type 'collection')
+  const collections = rootIds
+    .map((id) => treeNodes[id])
+    .filter((n) => n && n.type === 'collection');
+
+  const handleSave = async () => {
+    if (!activeTab) return;
+
+    // Save draft first
+    saveDraft(activeTab.id);
+    const updatedRequest = getRequest(activeTab.requestId);
+
+    if (!updatedRequest) return;
+
+    let targetCollectionId = selectedCollectionId;
+
+    // Create new collection if needed
+    if (creating && newCollectionName.trim()) {
+      const newNode = createNode('collection', newCollectionName.trim(), null);
+      targetCollectionId = newNode.id;
+      // Persist
+      await nodeRepository.create(newNode).catch(console.error);
     }
+
+    if (!targetCollectionId) return;
+
+    // Find or create request node in the collection
+    const existingNode = Object.values(treeNodes).find(
+      (n) => n.type === 'request' && n.dataId === activeTab.requestId
+    );
+
+    if (!existingNode) {
+      // Create a request tree node in the selected collection
+      const newNode = createNode('request', updatedRequest.name, targetCollectionId);
+      newNode.dataId = activeTab.requestId;
+      // Update the node in store
+      useCollectionStore.setState((state) => ({
+        treeNodes: {
+          ...state.treeNodes,
+          [newNode.id]: { ...state.treeNodes[newNode.id], dataId: activeTab.requestId },
+        },
+      }));
+      await nodeRepository.create({ ...newNode, dataId: activeTab.requestId }).catch(console.error);
+    }
+
+    // Persist the updated request
+    await requestRepository.update(updatedRequest.id, updatedRequest).catch(console.error);
+
+    setSaved(true);
+    setTimeout(() => onClose(), 800);
   };
 
   return (
-    <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal-card w-full max-w-sm" style={{ padding: '24px' }}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-base font-bold" style={{ color: 'var(--text-primary)' }}>Save Request</h2>
@@ -46,9 +88,9 @@ export default function SaveToCollectionModal({ onClose }: { onClose: () => void
           </div>
         ) : (
           <div className="space-y-3">
-            {!activeWorkspaceId && (
+            {!activeTab && (
               <p className="text-[11px]" style={{ color: 'var(--warning)' }}>
-                Create a workspace first to save requests.
+                No active request to save.
               </p>
             )}
 
@@ -57,7 +99,7 @@ export default function SaveToCollectionModal({ onClose }: { onClose: () => void
                 Request Name
               </label>
               <input
-                value={activeRequest.name}
+                value={activeTab ? (getRequest(activeTab.requestId)?.name || '') : ''}
                 readOnly
                 className="input text-[12px]"
                 style={{ padding: '6px 10px', background: 'var(--bg-hover)' }}
@@ -71,14 +113,13 @@ export default function SaveToCollectionModal({ onClose }: { onClose: () => void
                     Collection
                   </label>
                   <select
-                    value={selectedCol}
-                    onChange={e => setSelectedCol(e.target.value)}
+                    value={selectedCollectionId}
+                    onChange={(e) => setSelectedCollectionId(e.target.value)}
                     className="input text-[12px]"
                     style={{ padding: '6px 10px', cursor: 'pointer' }}
-                    disabled={!activeWorkspaceId}
                   >
                     <option value="">Select collection...</option>
-                    {collections.map(c => (
+                    {collections.map((c) => (
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </select>
@@ -93,9 +134,9 @@ export default function SaveToCollectionModal({ onClose }: { onClose: () => void
                   New Collection Name
                 </label>
                 <input
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleSave()}
+                  value={newCollectionName}
+                  onChange={(e) => setNewCollectionName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSave()}
                   placeholder="My API Collection"
                   className="input text-[12px]"
                   style={{ padding: '6px 10px' }}
@@ -109,7 +150,7 @@ export default function SaveToCollectionModal({ onClose }: { onClose: () => void
 
             <button
               onClick={handleSave}
-              disabled={(!creating && !selectedCol) || (creating && !newName.trim()) || !activeWorkspaceId}
+              disabled={(!creating && !selectedCollectionId) || (creating && !newCollectionName.trim()) || !activeTab}
               className="btn-primary w-full mt-2"
             >
               Save

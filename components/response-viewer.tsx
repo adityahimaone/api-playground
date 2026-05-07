@@ -1,14 +1,19 @@
 'use client';
 
-import { usePlaygroundStore } from '@/lib/store';
+import { useUIStore } from '@/lib/stores';
+import { useRequestStore } from '@/lib/stores';
+import { ApiResponse } from '@/lib/entities';
 import { useState } from 'react';
-import { SavedResponse } from '@/lib/types';
 
 export default function ResponseViewer() {
-  const { response, loading, activeResponseTab, setActiveResponseTab, activeRequest, viewSavedResponse } = usePlaygroundStore();
+  const { loading, response } = useUIStore();
+  const [activeResponseTab, setActiveResponseTab] = useState<'body' | 'headers' | 'meta'>('body');
   const [copied, setCopied] = useState(false);
   const [showExamples, setShowExamples] = useState(false);
-  const savedResponses = activeRequest.savedResponses || [];
+  const [selectedExample, setSelectedExample] = useState<ApiResponse | null>(null);
+
+  const activeTab = useUIStore.getState().tabs.find((t) => t.id === useUIStore.getState().activeTabId);
+  const savedResponses = activeTab ? useRequestStore.getState().getResponses(activeTab.requestId) : [];
 
   if (loading) {
     return (
@@ -21,11 +26,14 @@ export default function ResponseViewer() {
     );
   }
 
-  if (!response) return null;
+  const displayResponse = selectedExample || response;
 
-  const statusColor = response.status >= 200 && response.status < 300 ? 'var(--success)'
-    : response.status >= 300 && response.status < 400 ? 'var(--warning)'
-    : response.status >= 400 ? 'var(--danger)' : 'var(--text-muted)';
+  if (!displayResponse) return null;
+
+  const statusColor = displayResponse.status >= 200 && displayResponse.status < 300 ? 'var(--success)'
+    : displayResponse.status >= 300 && displayResponse.status < 400 ? 'var(--warning)'
+    : displayResponse.status >= 400 ? 'var(--danger)'
+    : 'var(--text-muted)';
 
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -34,30 +42,56 @@ export default function ResponseViewer() {
   };
 
   const copyBody = () => {
-    navigator.clipboard.writeText(response.body);
+    navigator.clipboard.writeText(displayResponse.body);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
 
   // Try to detect JSON and format
-  let formattedBody = response.body;
+  let formattedBody = displayResponse.body;
   try {
-    formattedBody = JSON.stringify(JSON.parse(response.body), null, 2);
+    formattedBody = JSON.stringify(JSON.parse(displayResponse.body), null, 2);
   } catch {}
+
+  const handleViewSavedResponse = (resp: { id: string; name: string; status: number; statusText: string; headers: Record<string, string>; body: string }) => {
+    setSelectedExample({
+      status: resp.status,
+      statusText: resp.statusText,
+      headers: resp.headers,
+      body: resp.body,
+      time: 0,
+      size: new Blob([resp.body]).size,
+    });
+    setShowExamples(false);
+  };
+
+  const clearSelectedExample = () => {
+    setSelectedExample(null);
+  };
 
   return (
     <div className="flex-1 flex flex-col min-h-0" style={{ background: 'var(--bg-page)' }}>
       {/* Status bar */}
       <div className="flex items-center gap-3 px-4 py-2" style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-card)' }}>
         <span className="text-[12px] font-bold" style={{ color: statusColor }}>
-          {response.status} {response.statusText}
+          {displayResponse.status} {displayResponse.statusText}
         </span>
         <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-          {response.time > 0 ? `${response.time}ms` : 'saved'}
+          {displayResponse.time > 0 ? `${displayResponse.time}ms` : 'saved'}
         </span>
         <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-          {formatSize(response.size)}
+          {formatSize(displayResponse.size)}
         </span>
+
+        {selectedExample && (
+          <button
+            onClick={clearSelectedExample}
+            className="text-[11px] font-medium px-2 py-0.5 rounded-lg"
+            style={{ background: 'var(--warning)', color: '#fff', border: 'none', cursor: 'pointer' }}
+          >
+            ← Back to live
+          </button>
+        )}
 
         {/* Saved responses dropdown */}
         {savedResponses.length > 0 && (
@@ -82,17 +116,17 @@ export default function ResponseViewer() {
                   minWidth: '280px',
                 }}
               >
-                {savedResponses.map((sr: SavedResponse) => {
+                {savedResponses.map((sr) => {
                   const srColor = sr.status >= 200 && sr.status < 300 ? 'var(--success)'
                     : sr.status >= 400 ? 'var(--danger)' : 'var(--warning)';
                   return (
                     <button
                       key={sr.id}
-                      onClick={() => { viewSavedResponse(sr); setShowExamples(false); }}
+                      onClick={() => handleViewSavedResponse(sr)}
                       className="w-full text-left px-3 py-2 flex items-center gap-2 transition-all"
                       style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
-                      onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                     >
                       <span
                         className="text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0"
@@ -118,7 +152,8 @@ export default function ResponseViewer() {
             style={{
               background: copied ? 'var(--success)' : 'var(--bg-hover)',
               color: copied ? '#fff' : 'var(--text-muted)',
-              border: 'none', cursor: 'pointer',
+              border: 'none',
+              cursor: 'pointer',
             }}
           >
             {copied ? '✓ Copied' : 'Copy Body'}
@@ -128,7 +163,7 @@ export default function ResponseViewer() {
 
       {/* Response tabs */}
       <div className="flex px-4" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-        {(['body', 'headers', 'meta'] as const).map(tab => (
+        {(['body', 'headers', 'meta'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveResponseTab(tab)}
@@ -152,13 +187,13 @@ export default function ResponseViewer() {
 
         {activeResponseTab === 'headers' && (
           <div className="space-y-1">
-            {Object.entries(response.headers).map(([key, value]) => (
+            {Object.entries(displayResponse.headers).map(([key, value]) => (
               <div key={key} className="flex gap-3 text-[12px]">
                 <span className="font-semibold shrink-0" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{key}</span>
                 <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{value}</span>
               </div>
             ))}
-            {Object.keys(response.headers).length === 0 && (
+            {Object.keys(displayResponse.headers).length === 0 && (
               <p className="text-[12px]" style={{ color: 'var(--text-faint)' }}>No headers</p>
             )}
           </div>
@@ -166,10 +201,10 @@ export default function ResponseViewer() {
 
         {activeResponseTab === 'meta' && (
           <div className="space-y-2">
-            <MetaRow label="Status" value={`${response.status} ${response.statusText}`} color={statusColor} />
-            <MetaRow label="Time" value={response.time > 0 ? `${response.time}ms` : 'N/A (saved response)'} />
-            <MetaRow label="Size" value={formatSize(response.size)} />
-            <MetaRow label="Headers" value={`${Object.keys(response.headers).length} headers`} />
+            <MetaRow label="Status" value={`${displayResponse.status} ${displayResponse.statusText}`} color={statusColor} />
+            <MetaRow label="Time" value={displayResponse.time > 0 ? `${displayResponse.time}ms` : 'N/A (saved response)'} />
+            <MetaRow label="Size" value={formatSize(displayResponse.size)} />
+            <MetaRow label="Headers" value={`${Object.keys(displayResponse.headers).length} headers`} />
           </div>
         )}
       </div>
