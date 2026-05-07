@@ -9,6 +9,7 @@
 
 import {
   VariableEntity,
+  VariableScope,
   KVPair,
   createKVPair,
 } from '../entities/index';
@@ -22,6 +23,7 @@ export interface ResolveContext {
   environmentVariables?: VariableEntity[];
   collectionVariables?: VariableEntity[];
   globalVariables?: VariableEntity[];
+  activeScopes?: Record<VariableScope, boolean>;
 }
 
 export interface PreviewResult {
@@ -79,16 +81,19 @@ function generateGuid(): string {
 function buildVariableMap(context: ResolveContext): Map<string, string> {
   const map = new Map<string, string>();
 
-  // Process scopes in priority order — each layer overwrites the previous
-  const layers: VariableEntity[][] = [
-    context.localVariables ?? [],
-    context.environmentVariables ?? [],
-    context.collectionVariables ?? [],
-    context.globalVariables ?? [],
+  // Scope-to-key mapping
+  const scopeLayers: Array<{ scope: VariableScope; vars: VariableEntity[] }> = [
+    { scope: 'local', vars: context.localVariables ?? [] },
+    { scope: 'environment', vars: context.environmentVariables ?? [] },
+    { scope: 'collection', vars: context.collectionVariables ?? [] },
+    { scope: 'global', vars: context.globalVariables ?? [] },
   ];
 
-  for (const layer of layers) {
-    for (const variable of layer) {
+  for (const { scope, vars } of scopeLayers) {
+    // Skip inactive scopes
+    if (context.activeScopes && !context.activeScopes[scope]) continue;
+
+    for (const variable of vars) {
       if (variable.enabled && variable.key.trim()) {
         map.set(variable.key.trim(), variable.currentValue);
       }

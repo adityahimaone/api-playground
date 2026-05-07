@@ -1,9 +1,18 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Environment, VariableEntity, createEnvironment, createVariableEntity, VariableScope } from '@/lib/entities';
+import { Environment, VariableEntity, createEnvironment, createVariableEntity, VariableScope, VARIABLE_SCOPE_COLORS } from '@/lib/entities';
 import { environmentRepository } from '@/lib/repositories/environment.repository';
 import { variableRepository } from '@/lib/repositories/variable.repository';
+import { useUIStore } from '@/lib/stores';
+
+// Scope definitions for the toggle bar
+const SCOPE_DEFS: { scope: VariableScope; label: string }[] = [
+  { scope: 'global', label: 'Global' },
+  { scope: 'environment', label: 'Env' },
+  { scope: 'collection', label: 'Collection' },
+  { scope: 'local', label: 'Local' },
+];
 
 export default function VariablesModal({ onClose }: { onClose: () => void }) {
   const [environments, setEnvironments] = useState<Environment[]>([]);
@@ -11,7 +20,8 @@ export default function VariablesModal({ onClose }: { onClose: () => void }) {
   const [selectedTab, setSelectedTab] = useState<string>('global');
   const [newEnvName, setNewEnvName] = useState('');
   const [envVariables, setEnvVariables] = useState<VariableEntity[]>([]);
-  const [revealedSecrets, setRevealedSecrets] = useState<Set<string>>(new Set());
+
+  const { activeVariableScopes, toggleVariableScope } = useUIStore();
 
   // Load from Dexie
   useEffect(() => {
@@ -77,15 +87,6 @@ export default function VariablesModal({ onClose }: { onClose: () => void }) {
     notifyVariablesChanged();
   };
 
-  const toggleSecretReveal = (varId: string) => {
-    setRevealedSecrets((prev) => {
-      const next = new Set(prev);
-      if (next.has(varId)) next.delete(varId);
-      else next.add(varId);
-      return next;
-    });
-  };
-
   const selectEnv = async (envId: string) => {
     setSelectedTab(envId);
     setActiveEnvId(envId);
@@ -103,9 +104,40 @@ export default function VariablesModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <p className="text-[11px] mb-4" style={{ color: 'var(--text-faint)' }}>
-          Use {'{{variable_name}}'} in URL, headers, body, or auth. Global vars are always active. Environment vars activate when selected.
+        <p className="text-[11px] mb-3" style={{ color: 'var(--text-faint)' }}>
+          Use {'{{variable_name}}'} in URL, headers, body, or auth. Toggle scopes below to control which variables are active during resolution.
         </p>
+
+        {/* ═══ Scope Active Toggles ═══ */}
+        <div className="flex items-center gap-1.5 mb-4">
+          <span className="text-[10px] font-semibold uppercase tracking-wider mr-1" style={{ color: 'var(--text-faint)' }}>
+            Active Scopes:
+          </span>
+          {SCOPE_DEFS.map(({ scope, label }) => {
+            const isActive = activeVariableScopes[scope];
+            const color = VARIABLE_SCOPE_COLORS[scope];
+            return (
+              <button
+                key={scope}
+                onClick={() => toggleVariableScope(scope)}
+                className="flex items-center gap-1 text-[10px] font-medium rounded-full px-2.5 py-1 transition-all"
+                style={{
+                  background: isActive ? `${color}20` : 'var(--bg-hover)',
+                  color: isActive ? color : 'var(--text-faint)',
+                  border: `1.5px solid ${isActive ? color : 'transparent'}`,
+                  cursor: 'pointer',
+                  opacity: isActive ? 1 : 0.5,
+                }}
+              >
+                <span
+                  className="inline-block w-2 h-2 rounded-full"
+                  style={{ background: isActive ? color : 'var(--text-faint)' }}
+                />
+                {label}
+              </button>
+            );
+          })}
+        </div>
 
         {/* Tab bar: global + environments */}
         <div className="flex gap-1 mb-4 flex-wrap">
@@ -150,87 +182,63 @@ export default function VariablesModal({ onClose }: { onClose: () => void }) {
         {/* Variables table */}
         <div className="space-y-1">
           <div className="flex gap-1 text-[10px] font-semibold uppercase tracking-wider items-center" style={{ color: 'var(--text-faint)' }}>
-            <span style={{ width: '100px', flexShrink: 0 }}>Key</span>
-            <span style={{ width: '100px', flexShrink: 0 }}>Initial</span>
-            <span style={{ flex: 1 }}>Current</span>
-            <span style={{ width: '26px', flexShrink: 0 }}></span>
+            <span style={{ width: '4px', flexShrink: 0 }}></span>
+            <span style={{ width: '120px', flexShrink: 0 }}>Key</span>
+            <span style={{ flex: 1 }}>Value</span>
             <span style={{ width: '26px', flexShrink: 0 }}></span>
             <span style={{ width: '26px', flexShrink: 0 }}></span>
             <span style={{ width: '26px', flexShrink: 0 }}></span>
           </div>
 
-          {envVariables.map((v) => (
-            <div key={v.id} className="flex gap-1 items-center">
-              <input
-                value={v.key}
-                onChange={(e) => updateVariable(v.id, { key: e.target.value })}
-                placeholder="variable_name"
-                className="input text-[12px]"
-                style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, width: '100px', flexShrink: 0 }}
-              />
-              <input
-                value={v.initialValue}
-                onChange={(e) => updateVariable(v.id, { initialValue: e.target.value })}
-                placeholder="initial value"
-                className="input text-[12px]"
-                style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 0.6 : 0.35, width: '100px', flexShrink: 0 }}
-              />
-              <div className="flex items-center flex-1 min-w-0">
-                {v.secret && !revealedSecrets.has(v.id) ? (
-                  <input
-                    value="********"
-                    readOnly
-                    className="input text-[12px]"
-                    style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, flex: 1 }}
-                  />
-                ) : (
-                  <input
-                    value={v.currentValue}
-                    onChange={(e) => updateVariable(v.id, { currentValue: e.target.value })}
-                    placeholder="current value"
-                    className="input text-[12px]"
-                    style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, flex: 1 }}
-                  />
-                )}
-              </div>
-              {/* Secret toggle */}
-              <button
-                onClick={() => updateVariable(v.id, { secret: !v.secret })}
-                className="btn-icon"
-                style={{ width: '26px', height: '26px', fontSize: '11px', color: v.secret ? 'var(--warning)' : 'var(--text-faint)' }}
-                title={v.secret ? 'Mark as not secret' : 'Mark as secret'}
-              >
-                {v.secret ? '🔒' : '🔓'}
-              </button>
-              {/* Reveal button (only for secrets) */}
-              {v.secret ? (
-                <button
-                  onClick={() => toggleSecretReveal(v.id)}
-                  className="btn-icon"
-                  style={{ width: '26px', height: '26px', fontSize: '11px', color: 'var(--text-muted)' }}
-                  title={revealedSecrets.has(v.id) ? 'Hide value' : 'Reveal value'}
+          {envVariables.map((v) => {
+            const scopeColor = VARIABLE_SCOPE_COLORS[v.scope] || '#6b7280';
+            return (
+              <div key={v.id} className="flex gap-1 items-center">
+                {/* Scope color bar */}
+                <span
+                  className="inline-block w-1 rounded-full self-stretch flex-shrink-0"
+                  style={{ background: scopeColor, minHeight: '26px' }}
+                  title={`${v.scope} scope`}
+                />
+                <input
+                  value={v.key}
+                  onChange={(e) => updateVariable(v.id, { key: e.target.value })}
+                  placeholder="variable_name"
+                  className="input text-[12px]"
+                  style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, width: '120px', flexShrink: 0 }}
+                />
+                <input
+                  value={v.currentValue}
+                  onChange={(e) => updateVariable(v.id, { currentValue: e.target.value })}
+                  placeholder="value"
+                  className="input text-[12px]"
+                  style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, flex: 1 }}
+                />
+                {/* Scope badge */}
+                <span
+                  className="text-[9px] px-1.5 py-0.5 rounded-full flex-shrink-0"
+                  style={{ background: `${scopeColor}20`, color: scopeColor, width: '26px', textAlign: 'center' }}
+                  title={v.scope}
                 >
-                  {revealedSecrets.has(v.id) ? '👁‍🗨' : '👁'}
+                  {v.scope.charAt(0).toUpperCase()}
+                </span>
+                {/* Enabled toggle */}
+                <button
+                  onClick={() => updateVariable(v.id, { enabled: !v.enabled })}
+                  className="btn-icon"
+                  style={{ width: '26px', height: '26px', fontSize: '11px', color: v.enabled ? 'var(--success)' : 'var(--text-faint)' }}
+                >
+                  {v.enabled ? '✓' : '○'}
                 </button>
-              ) : (
-                <span style={{ width: '26px', flexShrink: 0 }}></span>
-              )}
-              {/* Enabled toggle */}
-              <button
-                onClick={() => updateVariable(v.id, { enabled: !v.enabled })}
-                className="btn-icon"
-                style={{ width: '26px', height: '26px', fontSize: '11px', color: v.enabled ? 'var(--success)' : 'var(--text-faint)' }}
-              >
-                {v.enabled ? '✓' : '○'}
-              </button>
-              {/* Delete */}
-              <button
-                onClick={() => deleteVariable(v.id)}
-                className="btn-icon"
-                style={{ width: '26px', height: '26px', fontSize: '11px', color: 'var(--danger)' }}
-              >✕</button>
-            </div>
-          ))}
+                {/* Delete */}
+                <button
+                  onClick={() => deleteVariable(v.id)}
+                  className="btn-icon"
+                  style={{ width: '26px', height: '26px', fontSize: '11px', color: 'var(--danger)' }}
+                >✕</button>
+              </div>
+            );
+          })}
 
           {envVariables.length === 0 && (
             <p className="text-[11px] py-2" style={{ color: 'var(--text-faint)' }}>

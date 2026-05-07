@@ -14,6 +14,7 @@ import {
   createVariableEntity,
   HistoryEntry,
   VariableEntity,
+  VARIABLE_SCOPE_COLORS,
 } from '@/lib/entities';
 import { resolveVariables, resolveUrlWithParams, ResolveContext, extractVariables, getMissingVariables, previewResolved } from '@/lib/services/variable-resolver.service';
 import { resolveAuth } from '@/lib/services/auth-resolver.service';
@@ -80,7 +81,7 @@ export default function RequestBuilder() {
       const globalVars = await variableRepository.getByScope('global');
       const activeEnvId = useUIStore.getState().activeEnvId;
       const envVars = activeEnvId ? await variableRepository.getByScope('environment', activeEnvId) : [];
-      const ctx: ResolveContext = { globalVariables: globalVars, environmentVariables: envVars };
+      const ctx: ResolveContext = { globalVariables: globalVars, environmentVariables: envVars, activeScopes: useUIStore.getState().activeVariableScopes };
       setUrlPreview(previewResolved(merged.url!, ctx));
     }, 300);
     return () => clearTimeout(timer);
@@ -156,6 +157,7 @@ export default function RequestBuilder() {
         collectionVariables: collVars,
         globalVariables: globalVars,
         environmentVariables: envVars,
+        activeScopes: useUIStore.getState().activeVariableScopes,
       };
 
       // Resolve variables in URL
@@ -620,6 +622,7 @@ export default function RequestBuilder() {
             onChange={(params) => update({ params })}
             keyPlaceholder="Parameter name"
             valuePlaceholder="Value"
+            allVariables={allVariables}
           />
         )}
         {reqTab === 'headers' && (
@@ -628,6 +631,7 @@ export default function RequestBuilder() {
             onChange={(headers) => update({ headers })}
             keyPlaceholder="Header name"
             valuePlaceholder="Value"
+            allVariables={allVariables}
           />
         )}
         {reqTab === 'body' && <BodyEditor body={merged.body || { mode: 'none', content: '', formData: [] }} onChange={(body) => update({ body })} />}
@@ -638,11 +642,12 @@ export default function RequestBuilder() {
 }
 
 // ═══ KV Editor ═══
-function KVEditor({ items, onChange, keyPlaceholder, valuePlaceholder }: {
+function KVEditor({ items, onChange, keyPlaceholder, valuePlaceholder, allVariables }: {
   items: KVPair[];
   onChange: (items: KVPair[]) => void;
   keyPlaceholder: string;
   valuePlaceholder: string;
+  allVariables?: VariableEntity[];
 }) {
   const update = (id: string, field: 'key' | 'value', val: string) => {
     onChange(items.map((item) => item.id === id ? { ...item, [field]: val } : item));
@@ -656,6 +661,17 @@ function KVEditor({ items, onChange, keyPlaceholder, valuePlaceholder }: {
   };
   const add = () => onChange([...items, createKVPair()]);
 
+  // Helper: get scope color for a variable name found in value
+  const getVarScopeColor = (value: string): string | null => {
+    if (!allVariables || !value.includes('{{')) return null;
+    const match = value.match(/\{\{([^}]+)\}\}/);
+    if (!match) return null;
+    const varName = match[1].trim();
+    const found = allVariables.find(v => v.enabled && v.key.trim() === varName);
+    if (!found) return null;
+    return VARIABLE_SCOPE_COLORS[found.scope] || null;
+  };
+
   return (
     <div className="space-y-1.5">
       <div className="kv-row text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-faint)' }}>
@@ -663,30 +679,46 @@ function KVEditor({ items, onChange, keyPlaceholder, valuePlaceholder }: {
         <span>Value</span>
         <span></span>
       </div>
-      {items.map((item) => (
-        <div key={item.id} className="kv-row">
-          <input
-            value={item.key}
-            onChange={(e) => update(item.id, 'key', e.target.value)}
-            placeholder={keyPlaceholder}
-            className="input text-[12px]"
-            style={{ padding: '5px 8px', opacity: item.enabled ? 1 : 0.4, fontFamily: 'var(--font-mono)' }}
-          />
-          <input
-            value={item.value}
-            onChange={(e) => update(item.id, 'value', e.target.value)}
-            placeholder={valuePlaceholder}
-            className="input text-[12px]"
-            style={{ padding: '5px 8px', opacity: item.enabled ? 1 : 0.4, fontFamily: 'var(--font-mono)' }}
-          />
-          <div className="flex items-center gap-0.5">
-            <button onClick={() => toggle(item.id)} className="btn-icon" style={{ width: '22px', height: '22px', fontSize: '10px', color: item.enabled ? 'var(--success)' : 'var(--text-faint)' }}>
-              {item.enabled ? '✓' : '○'}
-            </button>
-            <button onClick={() => remove(item.id)} className="btn-icon" style={{ width: '22px', height: '22px', fontSize: '10px', color: 'var(--danger)' }}>✕</button>
+      {items.map((item) => {
+        const scopeColor = getVarScopeColor(item.value);
+        return (
+          <div key={item.id} className="kv-row">
+            <input
+              value={item.key}
+              onChange={(e) => update(item.id, 'key', e.target.value)}
+              placeholder={keyPlaceholder}
+              className="input text-[12px]"
+              style={{ padding: '5px 8px', opacity: item.enabled ? 1 : 0.4, fontFamily: 'var(--font-mono)' }}
+            />
+            <div className="relative flex-1">
+              {scopeColor && (
+                <span
+                  className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l"
+                  style={{ background: scopeColor }}
+                />
+              )}
+              <input
+                value={item.value}
+                onChange={(e) => update(item.id, 'value', e.target.value)}
+                placeholder={valuePlaceholder}
+                className="input text-[12px] w-full"
+                style={{
+                  padding: '5px 8px',
+                  opacity: item.enabled ? 1 : 0.4,
+                  fontFamily: 'var(--font-mono)',
+                  ...(scopeColor ? { paddingLeft: '10px' } : {}),
+                }}
+              />
+            </div>
+            <div className="flex items-center gap-0.5">
+              <button onClick={() => toggle(item.id)} className="btn-icon" style={{ width: '22px', height: '22px', fontSize: '10px', color: item.enabled ? 'var(--success)' : 'var(--text-faint)' }}>
+                {item.enabled ? '✓' : '○'}
+              </button>
+              <button onClick={() => remove(item.id)} className="btn-icon" style={{ width: '22px', height: '22px', fontSize: '10px', color: 'var(--danger)' }}>✕</button>
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
       <button onClick={add} className="text-[11px] font-medium" style={{ color: 'var(--text-faint)' }}>+ Add</button>
     </div>
   );

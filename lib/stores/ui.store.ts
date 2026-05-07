@@ -4,6 +4,7 @@ import {
   ApiResponse,
   ContextMenuState,
   RequestEntity,
+  VariableScope,
 } from '../entities';
 import { useRequestStore } from './request.store';
 
@@ -18,6 +19,7 @@ interface UIState {
   activeEnvId: string | null;
   loading: boolean;
   response: ApiResponse | null;
+  activeVariableScopes: Record<VariableScope, boolean>;
 }
 
 interface UIActions {
@@ -34,6 +36,7 @@ interface UIActions {
   hideContextMenu: () => void;
   setLoading: (loading: boolean) => void;
   setResponse: (response: ApiResponse | null) => void;
+  toggleVariableScope: (scope: VariableScope) => void;
 }
 
 const genId = () => Math.random().toString(36).slice(2, 10);
@@ -57,6 +60,7 @@ export const useUIStore = create<UIState & UIActions>((set, get) => ({
   activeEnvId: null,
   loading: false,
   response: null,
+  activeVariableScopes: { global: true, collection: true, environment: true, local: true, runtime: true },
 
   openTab: (requestId) => {
     const { tabs } = get();
@@ -164,4 +168,11 @@ export const useUIStore = create<UIState & UIActions>((set, get) => ({
   setLoading: (loading) => set({ loading }),
 
   setResponse: (response) => set({ response }),
+
+  toggleVariableScope: (scope) => set((state) => ({
+    activeVariableScopes: {
+      ...state.activeVariableScopes,
+      [scope]: !state.activeVariableScopes[scope],
+    },
+  })),
 }));
