@@ -6,19 +6,39 @@ import ResponseViewer from '@/components/response-viewer';
 import VariablesModal from '@/components/variables-modal';
 import SaveToCollectionModal from '@/components/save-modal';
 import { usePlaygroundStore } from '@/lib/store';
-import { useState } from 'react';
+import { FEATURES } from '@/lib/features';
+import { useState, useEffect } from 'react';
 
 export default function Home() {
   const { response, loading } = usePlaygroundStore();
   const [showVarsModal, setShowVarsModal] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [colorTheme, setColorTheme] = useState<'light' | 'dark'>('light');
+  const [authEnabled, setAuthEnabled] = useState(false);
+
+  // Load theme from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem('api-theme') as 'light' | 'dark' | null;
+    if (saved) {
+      setColorTheme(saved);
+      document.documentElement.setAttribute('data-theme', saved);
+    }
+    const savedAuth = localStorage.getItem('api-feature-auth');
+    setAuthEnabled(savedAuth === 'true');
+  }, []);
 
   const toggleTheme = () => {
     const next = colorTheme === 'dark' ? 'light' : 'dark';
     setColorTheme(next);
     document.documentElement.setAttribute('data-theme', next);
     localStorage.setItem('api-theme', next);
+  };
+
+  const toggleAuth = () => {
+    const next = !authEnabled;
+    setAuthEnabled(next);
+    localStorage.setItem('api-feature-auth', String(next));
   };
 
   return (
@@ -49,8 +69,46 @@ export default function Home() {
           <button onClick={toggleTheme} className="btn-icon" title="Toggle theme" style={{ width: '28px', height: '28px' }}>
             {colorTheme === 'dark' ? '☀️' : '🌙'}
           </button>
+          <button onClick={() => setShowSettings(!showSettings)} className="btn-icon" title="Settings" style={{ width: '28px', height: '28px' }}>
+            ⚙
+          </button>
         </div>
       </nav>
+
+      {/* Settings dropdown */}
+      {showSettings && (
+        <div
+          className="absolute right-4 top-12 z-50 rounded-xl p-4 space-y-3"
+          style={{
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border-subtle)',
+            boxShadow: 'var(--shadow-modal)',
+            minWidth: '240px',
+          }}
+        >
+          <div className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-faint)' }}>
+            Features
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[12px]" style={{ color: 'var(--text-secondary)' }}>Account / Auth</span>
+            <button
+              onClick={toggleAuth}
+              className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
+              style={{
+                background: authEnabled ? 'var(--accent-primary)' : 'var(--border-default)',
+              }}
+            >
+              <span
+                className="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform"
+                style={{ transform: authEnabled ? 'translateX(18px)' : 'translateX(3px)' }}
+              />
+            </button>
+          </div>
+          <p className="text-[10px]" style={{ color: 'var(--text-faint)' }}>
+            Enable Google OAuth login (requires Supabase + Google Cloud setup)
+          </p>
+        </div>
+      )}
 
       {/* Main layout */}
       <div className="flex flex-1 min-h-0">

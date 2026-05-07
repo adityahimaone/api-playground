@@ -38,6 +38,7 @@ export interface Collection {
   id: string;
   name: string;
   requests: ApiRequest[];
+  variables: KVPair[];  // Per-collection variables
 }
 
 export interface Environment {

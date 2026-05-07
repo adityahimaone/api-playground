@@ -38,9 +38,19 @@ interface PlaygroundStore {
   // Collection actions
   addCollection: (name: string) => void;
   deleteCollection: (id: string) => void;
+  renameCollection: (id: string, name: string) => void;
   saveToCollection: (collectionId: string) => void;
   loadFromCollection: (collectionId: string, requestId: string) => void;
   deleteFromCollection: (collectionId: string, requestId: string) => void;
+
+  // Per-collection variables
+  setCollectionVariables: (collectionId: string, vars: KVPair[]) => void;
+  addCollectionVariable: (collectionId: string) => void;
+  updateCollectionVariable: (collectionId: string, varId: string, field: 'key' | 'value', val: string) => void;
+  toggleCollectionVariable: (collectionId: string, varId: string) => void;
+  deleteCollectionVariable: (collectionId: string, varId: string) => void;
+  activeCollectionId: string | null;
+  setActiveCollectionId: (id: string | null) => void;
 
   // History
   clearHistory: () => void;
@@ -63,9 +73,14 @@ interface PlaygroundStore {
   setSidebarTab: (tab: 'collections' | 'history' | 'variables') => void;
   setActiveResponseTab: (tab: 'body' | 'headers' | 'meta') => void;
 
-  // Helpers
+  // Variable resolution (scoping: Global > Env > Collection)
   resolveVariables: (text: string) => string;
   getActiveVariables: () => KVPair[];
+
+  // Import / Export
+  exportCollection: (collectionId: string) => string;
+  exportAllCollections: () => string;
+  importCollection: (json: string) => boolean;
 }
 
 const genId = () => Math.random().toString(36).slice(2, 10);
@@ -81,6 +96,7 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
       environments: [],
       activeEnvId: null,
       globalVariables: [],
+      activeCollectionId: null,
       sidebarTab: 'collections',
       activeResponseTab: 'body',
 
@@ -94,7 +110,6 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
         set({ loading: true, response: null });
         try {
           const resolvedUrl = resolveVariables(activeRequest.url);
-          // Build query params
           const enabledParams = activeRequest.params.filter(p => p.enabled && p.key);
           let fullUrl = resolvedUrl;
           if (enabledParams.length > 0) {
@@ -104,20 +119,17 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
             fullUrl += (fullUrl.includes('?') ? '&' : '?') + qs;
           }
 
-          // Build headers
           const headers: Record<string, string> = {};
           activeRequest.headers.filter(h => h.enabled && h.key).forEach(h => {
             headers[resolveVariables(h.key)] = resolveVariables(h.value);
           });
 
-          // Auth
           if (activeRequest.auth.type === 'bearer' && activeRequest.auth.token) {
             headers['Authorization'] = `Bearer ${resolveVariables(activeRequest.auth.token)}`;
           } else if (activeRequest.auth.type === 'basic' && activeRequest.auth.username) {
             headers['Authorization'] = `Basic ${btoa(`${resolveVariables(activeRequest.auth.username)}:${resolveVariables(activeRequest.auth.password)}`)}`;
           }
 
-          // Body
           let body: string | undefined;
           if (activeRequest.method !== 'GET' && activeRequest.method !== 'HEAD') {
             if (activeRequest.bodyType === 'json' || activeRequest.bodyType === 'raw') {
@@ -132,11 +144,6 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
               body = fd.toString();
               headers['Content-Type'] = 'application/x-www-form-urlencoded';
             } else if (activeRequest.bodyType === 'form-data') {
-              const fd = new FormData();
-              activeRequest.formData.filter(f => f.enabled && f.key).forEach(f => {
-                fd.append(resolveVariables(f.key), resolveVariables(f.value));
-              });
-              // Can't use fetch with FormData body directly to /api/proxy, send as JSON
               const formObj: Record<string, string> = {};
               activeRequest.formData.filter(f => f.enabled && f.key).forEach(f => {
                 formObj[resolveVariables(f.key)] = resolveVariables(f.value);
@@ -150,15 +157,9 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
           const res = await fetch('/api/proxy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              method: activeRequest.method,
-              url: fullUrl,
-              headers,
-              body,
-            }),
+            body: JSON.stringify({ method: activeRequest.method, url: fullUrl, headers, body }),
           });
           const elapsed = Math.round(performance.now() - start);
-
           const data = await res.json();
           const responseBody = typeof data.body === 'string' ? data.body : JSON.stringify(data.body, null, 2);
 
@@ -173,7 +174,6 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
 
           set({ response: apiRes, loading: false });
 
-          // Add to history
           const entry: HistoryEntry = {
             id: genId(),
             request: { ...get().activeRequest },
@@ -198,10 +198,14 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
 
       // Collections
       addCollection: (name) => set((s) => ({
-        collections: [...s.collections, { id: genId(), name, requests: [] }],
+        collections: [...s.collections, { id: genId(), name, requests: [], variables: [] }],
       })),
       deleteCollection: (id) => set((s) => ({
         collections: s.collections.filter(c => c.id !== id),
+        activeCollectionId: s.activeCollectionId === id ? null : s.activeCollectionId,
+      })),
+      renameCollection: (id, name) => set((s) => ({
+        collections: s.collections.map(c => c.id === id ? { ...c, name } : c),
       })),
       saveToCollection: (collectionId) => set((s) => ({
         collections: s.collections.map(c =>
@@ -213,12 +217,46 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
       loadFromCollection: (collectionId, requestId) => {
         const col = get().collections.find(c => c.id === collectionId);
         const req = col?.requests.find(r => r.id === requestId);
-        if (req) set({ activeRequest: { ...req }, response: null });
+        if (req) set({ activeRequest: { ...req }, response: null, activeCollectionId: collectionId });
       },
       deleteFromCollection: (collectionId, requestId) => set((s) => ({
         collections: s.collections.map(c =>
           c.id === collectionId
             ? { ...c, requests: c.requests.filter(r => r.id !== requestId) }
+            : c
+        ),
+      })),
+
+      // Per-collection variables
+      setActiveCollectionId: (id) => set({ activeCollectionId: id }),
+      setCollectionVariables: (collectionId, vars) => set((s) => ({
+        collections: s.collections.map(c => c.id === collectionId ? { ...c, variables: vars } : c),
+      })),
+      addCollectionVariable: (collectionId) => set((s) => ({
+        collections: s.collections.map(c =>
+          c.id === collectionId
+            ? { ...c, variables: [...c.variables, createKVPair()] }
+            : c
+        ),
+      })),
+      updateCollectionVariable: (collectionId, varId, field, val) => set((s) => ({
+        collections: s.collections.map(c =>
+          c.id === collectionId
+            ? { ...c, variables: c.variables.map(v => v.id === varId ? { ...v, [field]: val } : v) }
+            : c
+        ),
+      })),
+      toggleCollectionVariable: (collectionId, varId) => set((s) => ({
+        collections: s.collections.map(c =>
+          c.id === collectionId
+            ? { ...c, variables: c.variables.map(v => v.id === varId ? { ...v, enabled: !v.enabled } : v) }
+            : c
+        ),
+      })),
+      deleteCollectionVariable: (collectionId, varId) => set((s) => ({
+        collections: s.collections.map(c =>
+          c.id === collectionId
+            ? { ...c, variables: c.variables.filter(v => v.id !== varId) }
             : c
         ),
       })),
@@ -262,28 +300,100 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
       setSidebarTab: (tab) => set({ sidebarTab: tab }),
       setActiveResponseTab: (tab) => set({ activeResponseTab: tab }),
 
-      // Variable resolution
+      // Variable resolution: Global > Environment > Collection (last wins)
       resolveVariables: (text) => {
         if (!text) return text;
-        const { globalVariables, environments, activeEnvId } = get();
+        const { globalVariables, environments, activeEnvId, collections, activeCollectionId } = get();
         const activeEnv = environments.find(e => e.id === activeEnvId);
+        const activeCol = collections.find(c => c.id === activeCollectionId);
+
+        // Merge order: global < env < collection (collection wins on conflict)
         const allVars = [
           ...globalVariables.filter(v => v.enabled),
           ...(activeEnv?.variables.filter(v => v.enabled) || []),
+          ...(activeCol?.variables.filter(v => v.enabled) || []),
         ];
+
         return text.replace(/\{\{(\s*[\w.-]+\s*)\}\}/g, (_, key) => {
           const trimmed = key.trim();
-          const v = allVars.find(vv => vv.key === trimmed);
-          return v ? v.value : `{{${trimmed}}}`;
+          // Last match wins (collection > env > global)
+          const matches = allVars.filter(vv => vv.key === trimmed);
+          return matches.length > 0 ? matches[matches.length - 1].value : `{{${trimmed}}}`;
         });
       },
       getActiveVariables: () => {
-        const { globalVariables, environments, activeEnvId } = get();
+        const { globalVariables, environments, activeEnvId, collections, activeCollectionId } = get();
         const activeEnv = environments.find(e => e.id === activeEnvId);
+        const activeCol = collections.find(c => c.id === activeCollectionId);
         return [
           ...globalVariables.filter(v => v.enabled),
           ...(activeEnv?.variables.filter(v => v.enabled) || []),
+          ...(activeCol?.variables.filter(v => v.enabled) || []),
         ];
+      },
+
+      // Import / Export
+      exportCollection: (collectionId) => {
+        const col = get().collections.find(c => c.id === collectionId);
+        if (!col) return '';
+        return JSON.stringify({
+          _exportType: 'api-playground-collection',
+          _version: 1,
+          exportedAt: new Date().toISOString(),
+          collection: {
+            name: col.name,
+            variables: col.variables,
+            requests: col.requests,
+          },
+        }, null, 2);
+      },
+      exportAllCollections: () => {
+        const { collections } = get();
+        return JSON.stringify({
+          _exportType: 'api-playground-collections',
+          _version: 1,
+          exportedAt: new Date().toISOString(),
+          collections: collections.map(c => ({
+            name: c.name,
+            variables: c.variables,
+            requests: c.requests,
+          })),
+        }, null, 2);
+      },
+      importCollection: (json) => {
+        try {
+          const data = JSON.parse(json);
+          if (data._exportType === 'api-playground-collection') {
+            // Single collection import
+            const col = data.collection;
+            set((s) => ({
+              collections: [...s.collections, {
+                id: genId(),
+                name: col.name || 'Imported Collection',
+                variables: col.variables || [],
+                requests: col.requests || [],
+              }],
+            }));
+            return true;
+          } else if (data._exportType === 'api-playground-collections') {
+            // Multiple collections import
+            set((s) => ({
+              collections: [
+                ...s.collections,
+                ...((data.collections || []).map((c: any) => ({
+                  id: genId(),
+                  name: c.name || 'Imported Collection',
+                  variables: c.variables || [],
+                  requests: c.requests || [],
+                }))),
+              ],
+            }));
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
       },
     }),
     { name: 'api-playground-store' }
