@@ -99,12 +99,13 @@ function methodFromString(m: string | string[]): HttpMethod {
   return valid.includes(upper as HttpMethod) ? (upper as HttpMethod) : 'GET';
 }
 
-function parseUrl(url: PostmanUrl | string): string {
+function parseUrl(url: PostmanUrl | string | undefined): string {
+  if (!url) return '';
   return typeof url === 'string' ? url : url.raw || '';
 }
 
-function parseQueryParams(url: PostmanUrl | string): KVPair[] {
-  if (typeof url === 'string' || !url.query) return [];
+function parseQueryParams(url: PostmanUrl | string | undefined): KVPair[] {
+  if (!url || typeof url === 'string' || !url.query) return [];
   return url.query.map(q =>
     createKVPair(q.key || '', q.value || '', q.disabled !== true)
   );
