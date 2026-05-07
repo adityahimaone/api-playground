@@ -4,6 +4,7 @@ import {
   ApiRequest, ApiResponse, Workspace, Collection, Environment, HistoryEntry,
   createRequest, createKVPair, createWorkspace, KVPair
 } from './types';
+import { importPostmanCollection, isPostmanCollection } from './postman-import';
 
 interface PlaygroundStore {
   // Active request
@@ -444,6 +445,24 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
       importWorkspace: (json) => {
         try {
           const data = JSON.parse(json);
+
+          // ── Postman Collection v2.1.0 import ──
+          if (isPostmanCollection(json)) {
+            const result = importPostmanCollection(json);
+            if (!result.success) return false;
+            const ws = createWorkspace(data.info?.name || 'Imported from Postman');
+            ws.collections = result.collections;
+            // Attach collection-level variables from Postman top-level vars
+            if (result.variables.length > 0 && ws.collections.length > 0) {
+              ws.collections[0].variables = result.variables;
+            }
+            set((s) => ({
+              workspaces: [...s.workspaces, ws],
+              activeWorkspaceId: ws.id,
+            }));
+            return true;
+          }
+
           if (data._exportType === 'api-playground-workspace') {
             const ws = createWorkspace(data.workspace?.name || 'Imported Workspace');
             ws.collections = (data.workspace?.collections || []).map((c: any) => ({

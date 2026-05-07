@@ -83,7 +83,7 @@ export default function Sidebar() {
     reader.onload = (ev) => {
       const text = ev.target?.result as string;
       if (!importWorkspace(text)) {
-        alert('Invalid file format.');
+        alert('Invalid file format. Supported: Postman Collection (v2.1.0) or API Playground export.');
       }
     };
     reader.readAsText(file);
