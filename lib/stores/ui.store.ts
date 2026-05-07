@@ -75,6 +75,7 @@ export const useUIStore = create<UIState & UIActions>((set, get) => ({
       id: genId(),
       requestId,
       draftState: request ? { ...request } : {},
+      localVariableIds: [],
       isDirty: false,
     };
 

@@ -13,7 +13,7 @@ import {
   createKVPair,
   HistoryEntry,
 } from '@/lib/entities';
-import { resolveVariables, resolveUrlWithParams } from '@/lib/services/variable-resolver.service';
+import { resolveVariables, resolveUrlWithParams, ResolveContext } from '@/lib/services/variable-resolver.service';
 import { resolveAuth } from '@/lib/services/auth-resolver.service';
 import { executeRequest } from '@/lib/services/request-executor.service';
 import { requestRepository } from '@/lib/repositories/request.repository';

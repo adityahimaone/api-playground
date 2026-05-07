@@ -6,8 +6,8 @@
  * Returns resolved Authorization header or query param for apikey type.
  */
 
-import { AuthConfig, TreeNode, RequestEntity, Environment, KVPair } from '../entities/index';
-import { resolveVariables } from './variable-resolver.service';
+import { AuthConfig, TreeNode, RequestEntity, Environment, KVPair, VariableEntity } from '../entities/index';
+import { resolveVariables, ResolveContext } from './variable-resolver.service';
 
 interface AuthResult {
   /** Resolved headers to add (e.g. Authorization) */
@@ -26,7 +26,9 @@ interface AuthResolverContext {
   /** ID of the active environment */
   activeEnvId: string | null;
   /** Collection-level variables for resolving dynamic auth values */
-  collectionVars?: KVPair[];
+  collectionVars?: VariableEntity[];
+  /** All variable entities (for looking up environment variable values by ID) */
+  allVariables?: VariableEntity[];
 }
 
 const EMPTY_AUTH: AuthConfig = {
@@ -135,14 +137,19 @@ function findFirstNonInheritAuth(
 
 /**
  * Build variable scopes from environments for resolving dynamic auth values.
+ * Looks up actual VariableEntity values by the environment's variableIds.
  */
 function getEnvironmentVars(
   environments: Environment[],
-  activeEnvId: string | null
-): KVPair[] {
+  activeEnvId: string | null,
+  allVariables: VariableEntity[]
+): VariableEntity[] {
   if (!activeEnvId) return [];
   const env = environments.find(e => e.id === activeEnvId);
-  return env?.variables ?? [];
+  if (!env) return [];
+  return allVariables.filter(
+    v => v.enabled && v.scope === 'environment' && env.variableIds.includes(v.id)
+  );
 }
 
 /**
@@ -157,11 +164,11 @@ export function resolveAuth(
   const auth = findEffectiveAuth(requestId, tree, requests);
 
   // Build variable scopes for resolving dynamic auth values
-  const envVars = getEnvironmentVars(environments, activeEnvId);
-  const varScopes = {
-    globals: [],
-    environment: envVars,
-    collectionVars: collectionVars ?? [],
+  const envVars = getEnvironmentVars(environments, activeEnvId, ctx.allVariables ?? []);
+  const resolveContext: ResolveContext = {
+    globalVariables: [],
+    environmentVariables: envVars,
+    collectionVariables: collectionVars ?? [],
   };
 
   const result: AuthResult = {
@@ -171,7 +178,7 @@ export function resolveAuth(
 
   switch (auth.type) {
     case 'bearer': {
-      const token = resolveVariables(auth.token, varScopes);
+      const token = resolveVariables(auth.token, resolveContext);
       if (token) {
         result.headers['Authorization'] = `Bearer ${token}`;
       }
@@ -179,8 +186,8 @@ export function resolveAuth(
     }
 
     case 'basic': {
-      const username = resolveVariables(auth.username, varScopes);
-      const password = resolveVariables(auth.password, varScopes);
+      const username = resolveVariables(auth.username, resolveContext);
+      const password = resolveVariables(auth.password, resolveContext);
       if (username) {
         const encoded = typeof btoa === 'function'
           ? btoa(`${username}:${password}`)
@@ -191,8 +198,8 @@ export function resolveAuth(
     }
 
     case 'apikey': {
-      const apiKey = resolveVariables(auth.apiKey, varScopes);
-      const apiKeyName = resolveVariables(auth.apiKeyName, varScopes);
+      const apiKey = resolveVariables(auth.apiKey, resolveContext);
+      const apiKeyName = resolveVariables(auth.apiKeyName, resolveContext);
 
       if (apiKey && apiKeyName) {
         if (auth.apiKeyIn === 'header') {

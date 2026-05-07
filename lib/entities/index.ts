@@ -1,6 +1,7 @@
 /**
  * Single source of truth for ALL entity types.
  * Normalized architecture: tree nodes are flat, data is separate.
+ * Postman-like variable system with scopes and inheritance.
  */
 
 // ═══ TREE NODE ═══
@@ -8,13 +9,28 @@ export type NodeType = 'collection' | 'folder' | 'request';
 
 export interface TreeNode {
   id: string;
-  parentId: string | null; // null = root
+  parentId: string | null;
   type: NodeType;
   name: string;
   childrenIds: string[];
-  dataId?: string; // FK → RequestEntity.id (only for type='request')
-  /** Position order among siblings */
+  dataId?: string;
   order: number;
+}
+
+// ═══ VARIABLE ═══
+export type VariableScope = 'global' | 'collection' | 'environment' | 'local' | 'runtime';
+
+export interface VariableEntity {
+  id: string;
+  key: string;
+  initialValue: string;
+  currentValue: string;
+  enabled: boolean;
+  secret: boolean;
+  scope: VariableScope;
+  scopeId?: string; // FK: environmentId, collectionId, or tabId
+  createdAt: number;
+  updatedAt: number;
 }
 
 // ═══ REQUEST ═══
@@ -72,8 +88,11 @@ export interface ResponseExample {
 export interface Environment {
   id: string;
   name: string;
-  variables: KVPair[];
+  color?: string;
+  variableIds: string[];
   isActive: boolean;
+  createdAt: number;
+  updatedAt: number;
 }
 
 // ═══ HISTORY ═══
@@ -94,6 +113,7 @@ export interface Tab {
   id: string;
   requestId: string;
   draftState: Partial<RequestEntity>;
+  localVariableIds: string[];
   isDirty: boolean;
 }
 
@@ -142,11 +162,33 @@ export const METHOD_COLORS: Record<HttpMethod, string> = {
   DELETE: '#ef4444', HEAD: '#8b5cf6', OPTIONS: '#6b7280',
 };
 
+export const VARIABLE_SCOPE_COLORS: Record<VariableScope, string> = {
+  global: '#6b7280',
+  collection: '#8b5cf6',
+  environment: '#3b82f6',
+  local: '#f97316',
+  runtime: '#22c55e',
+};
+
 // ═══ FACTORY FUNCTIONS ═══
 const genId = () => Math.random().toString(36).slice(2, 10);
 
 export function createKVPair(key = '', value = '', enabled = true): KVPair {
   return { key, value, enabled, id: genId() };
+}
+
+export function createVariableEntity(key = '', value = '', scope: VariableScope = 'global', scopeId?: string): VariableEntity {
+  const now = Date.now();
+  return {
+    id: genId(), key,
+    initialValue: value,
+    currentValue: value,
+    enabled: true,
+    secret: false,
+    scope,
+    scopeId,
+    createdAt: now, updatedAt: now,
+  };
 }
 
 export function createTreeNode(type: NodeType, name: string, parentId: string | null = null, order = 0): TreeNode {
@@ -168,8 +210,8 @@ export function createResponseExample(requestId: string, name: string, status: n
   return { id: genId(), requestId, name, status, statusText, headers, body, createdAt: Date.now() };
 }
 
-export function createEnvironment(name: string): Environment {
-  return { id: genId(), name, variables: [createKVPair()], isActive: false };
+export function createEnvironment(name: string, color?: string): Environment {
+  return { id: genId(), name, color, variableIds: [], isActive: false, createdAt: Date.now(), updatedAt: Date.now() };
 }
 
 export function cloneRequest(req: RequestEntity): RequestEntity {
@@ -180,4 +222,16 @@ export function extractPathVariables(url: string): string[] {
   const matches = url.match(/:([a-zA-Z_][\w]*)/g);
   if (!matches) return [];
   return Array.from(new Set(matches.map(m => m.slice(1))));
+}
+
+/** Extract all {{variable}} names from a text string */
+export function extractVariables(text: string): string[] {
+  const matches = text.match(/\{\{(\s*[\w.-]+\s*)\}\}/g);
+  if (!matches) return [];
+  return Array.from(new Set(matches.map(m => m.replace(/\{\{|\}\}/g, '').trim())));
+}
+
+/** Detect if a variable name is a dynamic variable */
+export function isDynamicVariable(name: string): boolean {
+  return name.startsWith('$');
 }
