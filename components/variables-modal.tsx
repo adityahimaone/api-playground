@@ -53,22 +53,27 @@ export default function VariablesModal({ onClose }: { onClose: () => void }) {
     if (activeEnvId === id) setActiveEnvId(null);
   };
 
+  const notifyVariablesChanged = () => document.dispatchEvent(new CustomEvent('variables:changed'));
+
   const addVariable = async () => {
     const scope = selectedTab === 'global' ? 'global' : 'environment';
     const scopeId = selectedTab === 'global' ? undefined : selectedTab;
     const newVar = createVariableEntity('', '', scope, scopeId);
     await variableRepository.create(newVar);
     setEnvVariables((prev) => [...prev, newVar]);
+    notifyVariablesChanged();
   };
 
   const updateVariable = async (id: string, changes: Partial<VariableEntity>) => {
     await variableRepository.update(id, changes);
     setEnvVariables((prev) => prev.map((v) => v.id === id ? { ...v, ...changes } : v));
+    notifyVariablesChanged();
   };
 
   const deleteVariable = async (id: string) => {
     await variableRepository.delete(id);
     setEnvVariables((prev) => prev.filter((v) => v.id !== id));
+    notifyVariablesChanged();
   };
 
   const selectEnv = async (envId: string) => {

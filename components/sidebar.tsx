@@ -283,22 +283,27 @@ export default function Sidebar() {
     if (activeEnvId === id) setActiveEnvId(null);
   };
 
+  const notifyVariablesChanged = () => document.dispatchEvent(new CustomEvent('variables:changed'));
+
   const addVariable = async () => {
     const scope = selectedEnvTab === 'global' ? 'global' : 'environment';
     const scopeId = selectedEnvTab === 'global' ? undefined : selectedEnvTab;
     const newVar = createVariableEntity('', '', scope, scopeId);
     await variableRepository.create(newVar);
     setEnvVariables((prev) => [...prev, newVar]);
+    notifyVariablesChanged();
   };
 
   const updateVariable = async (id: string, changes: Partial<VariableEntity>) => {
     await variableRepository.update(id, changes);
     setEnvVariables((prev) => prev.map((v) => v.id === id ? { ...v, ...changes } : v));
+    notifyVariablesChanged();
   };
 
   const deleteVariable = async (id: string) => {
     await variableRepository.delete(id);
     setEnvVariables((prev) => prev.filter((v) => v.id !== id));
+    notifyVariablesChanged();
   };
 
   const activeEnv = environments.find((e) => e.id === activeEnvId);
@@ -482,7 +487,7 @@ export default function Sidebar() {
               {environments.map((env) => (
                 <div key={env.id} className="flex items-center gap-0.5">
                   <button
-                    onClick={() => { setSelectedEnvTab(env.id); setActiveEnvId(env.id); }}
+                    onClick={() => { setSelectedEnvTab(env.id); setActiveEnvId(env.id); useUIStore.setState({ activeEnvId: env.id }); notifyVariablesChanged(); }}
                     className={`pill ${selectedEnvTab === env.id ? 'active' : ''}`}
                   >
                     {env.name}

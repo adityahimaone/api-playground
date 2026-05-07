@@ -43,6 +43,15 @@ export default function RequestBuilder() {
   } as RequestEntity : null;
 
   // Realtime URL preview — debounce variable resolution
+  // Re-runs when URL changes OR when variables change (via custom event)
+  const [variableVersion, setVariableVersion] = useState(0);
+
+  useEffect(() => {
+    const handler = () => setVariableVersion(v => v + 1);
+    document.addEventListener('variables:changed', handler);
+    return () => document.removeEventListener('variables:changed', handler);
+  }, []);
+
   useEffect(() => {
     if (!merged?.url || !merged.url.includes('{{')) {
       setUrlPreview(null);
@@ -56,7 +65,7 @@ export default function RequestBuilder() {
       setUrlPreview(previewResolved(merged.url!, ctx));
     }, 300);
     return () => clearTimeout(timer);
-  }, [merged?.url]);
+  }, [merged?.url, variableVersion]);
 
   const update = (changes: Partial<RequestEntity>) => {
     if (activeTab) updateDraft(activeTab.id, changes);
