@@ -52,6 +52,15 @@ export default function Home() {
         if (resps.length > 0) {
           useRequestStore.getState().loadResponses(resps);
         }
+
+        // Auto-create a scratch request if no tabs exist (like Postman's untitled request)
+        const uiState = useUIStore.getState();
+        if (uiState.tabs.length === 0) {
+          const req = useRequestStore.getState().createRequest('Untitled Request');
+          // Persist to Dexie
+          await requestRepository.create(req);
+          uiState.openTab(req.id);
+        }
       } catch (err) {
         console.error('Failed to load data from Dexie:', err);
       }
