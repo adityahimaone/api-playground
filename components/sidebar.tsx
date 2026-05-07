@@ -1,7 +1,7 @@
 'use client';
 
 import { usePlaygroundStore } from '@/lib/store';
-import { METHOD_COLORS, HttpMethod, createKVPair } from '@/lib/types';
+import { METHOD_COLORS, HttpMethod, createKVPair, Collection, CollectionItem, CollectionFolder, CollectionRequestItem } from '@/lib/types';
 import { useState, useRef } from 'react';
 
 export default function Sidebar() {
@@ -12,7 +12,8 @@ export default function Sidebar() {
     globalVariables, addGlobalVariable, updateGlobalVariable, toggleGlobalVariable, deleteGlobalVariable,
     environments, activeEnvId, setActiveEnvId, addEnvironment, deleteEnvironment, updateEnvironment,
     activeCollectionId, setActiveCollectionId,
-    deleteCollection, renameCollection, loadFromCollection, deleteFromCollection,
+    deleteCollection, renameCollection, loadFromCollectionItem, deleteFromCollectionItem,
+    addFolderToCollection, renameCollectionItem,
     exportWorkspace, exportAllWorkspaces, importWorkspace,
   } = usePlaygroundStore();
 
@@ -20,11 +21,12 @@ export default function Sidebar() {
   const [adding, setAdding] = useState(false);
   const [newEnvName, setNewEnvName] = useState('');
   const [envTab, setEnvTab] = useState<string>('global');
-  const [editingColId, setEditingColId] = useState<string | null>(null);
-  const [editingColName, setEditingColName] = useState('');
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [editingItemName, setEditingItemName] = useState('');
   const [editingWsId, setEditingWsId] = useState<string | null>(null);
   const [editingWsName, setEditingWsName] = useState('');
   const [showWsMenu, setShowWsMenu] = useState(false);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const ws = workspaces.find(w => w.id === activeWorkspaceId);
@@ -40,7 +42,17 @@ export default function Sidebar() {
     }
   };
 
-  // --- Workspace helpers ---
+  // --- Folder expand/collapse ---
+  const toggleFolder = (id: string) => {
+    setExpandedFolders(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // --- Workspace rename ---
   const startRenameWs = (wsId: string) => {
     setEditingWsId(wsId);
     const w = workspaces.find(w => w.id === wsId);
@@ -176,7 +188,7 @@ export default function Sidebar() {
                 className="text-[10px] flex-1"
                 style={{ color: 'var(--text-faint)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0' }}
               >
-                ↓ Import
+                ↓ Import (Postman / Playground)
               </button>
               <button
                 onClick={() => { handleExportAll(); setShowWsMenu(false); }}
@@ -243,23 +255,23 @@ export default function Sidebar() {
             )}
 
             {activeWorkspaceId && collections.length === 0 && !adding && (
-              <p className="text-[11px]" style={{ color: 'var(--text-faint)' }}>No collections yet</p>
+              <p className="text-[11px]" style={{ color: 'var(--text-faint)' }}>No collections yet. Click + to create one.</p>
             )}
 
             {collections.map(col => (
-              <CollectionItem
+              <CollectionNode
                 key={col.id}
                 collection={col}
                 isActive={activeCollectionId === col.id}
                 onSelect={() => setActiveCollectionId(activeCollectionId === col.id ? null : col.id)}
                 onDelete={() => deleteCollection(col.id)}
-                onLoadReq={(reqId) => loadFromCollection(col.id, reqId)}
-                onDeleteReq={(reqId) => deleteFromCollection(col.id, reqId)}
                 onRename={(newName) => renameCollection(col.id, newName)}
-                editingColId={editingColId}
-                setEditingColId={setEditingColId}
-                editingColName={editingColName}
-                setEditingColName={setEditingColName}
+                expandedFolders={expandedFolders}
+                toggleFolder={toggleFolder}
+                editingItemId={editingItemId}
+                editingItemName={editingItemName}
+                setEditingItemId={setEditingItemId}
+                setEditingItemName={setEditingItemName}
               />
             ))}
           </div>
@@ -315,22 +327,14 @@ export default function Sidebar() {
               Use {'{{variable_name}}'} in URL, headers, body, or auth. Scope: Global &lt; Environment &lt; Collection (last wins).
             </p>
 
-            {/* Tab bar: global + environments */}
             <div className="flex gap-1 mb-4 flex-wrap">
-              <button
-                onClick={() => setEnvTab('global')}
-                className={`pill ${envTab === 'global' ? 'active' : ''}`}
-              >
-                Global
-              </button>
+              <button onClick={() => setEnvTab('global')} className={`pill ${envTab === 'global' ? 'active' : ''}`}>Global</button>
               {environments.map(env => (
                 <div key={env.id} className="flex items-center gap-0.5">
                   <button
                     onClick={() => { setEnvTab(env.id); setActiveEnvId(env.id); }}
                     className={`pill ${envTab === env.id ? 'active' : ''}`}
-                  >
-                    {env.name}
-                  </button>
+                  >{env.name}</button>
                   <button
                     onClick={() => deleteEnvironment(env.id)}
                     className="btn-icon"
@@ -360,30 +364,17 @@ export default function Sidebar() {
               </div>
             </div>
 
-            {/* Variables table */}
             <div className="space-y-1">
               <div className="kv-row text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-faint)' }}>
-                <span>Key</span>
-                <span>Value</span>
-                <span></span>
+                <span>Key</span><span>Value</span><span></span>
               </div>
 
               {envTab === 'global' && globalVariables.map(v => (
                 <div key={v.id} className="kv-row">
-                  <input
-                    value={v.key}
-                    onChange={e => updateGlobalVariable(v.id, 'key', e.target.value)}
-                    placeholder="variable_name"
-                    className="input text-[12px]"
-                    style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4 }}
-                  />
-                  <input
-                    value={v.value}
-                    onChange={e => updateGlobalVariable(v.id, 'value', e.target.value)}
-                    placeholder="value"
-                    className="input text-[12px]"
-                    style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4 }}
-                  />
+                  <input value={v.key} onChange={e => updateGlobalVariable(v.id, 'key', e.target.value)} placeholder="variable_name"
+                    className="input text-[12px]" style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4 }} />
+                  <input value={v.value} onChange={e => updateGlobalVariable(v.id, 'value', e.target.value)} placeholder="value"
+                    className="input text-[12px]" style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4 }} />
                   <div className="flex items-center gap-0.5">
                     <button onClick={() => toggleGlobalVariable(v.id)} className="btn-icon" style={{ width: '22px', height: '22px', fontSize: '10px', color: v.enabled ? 'var(--success)' : 'var(--text-faint)' }}>
                       {v.enabled ? '✓' : '○'}
@@ -399,50 +390,26 @@ export default function Sidebar() {
 
               {envTab !== 'global' && activeEnv && activeEnv.variables.map(v => (
                 <div key={v.id} className="kv-row">
-                  <input
-                    value={v.key}
-                    onChange={e => updateEnvironment(activeEnv.id, {
-                      variables: activeEnv.variables.map(vv => vv.id === v.id ? { ...vv, key: e.target.value } : vv)
-                    })}
-                    placeholder="variable_name"
-                    className="input text-[12px]"
-                    style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4 }}
-                  />
-                  <input
-                    value={v.value}
-                    onChange={e => updateEnvironment(activeEnv.id, {
-                      variables: activeEnv.variables.map(vv => vv.id === v.id ? { ...vv, value: e.target.value } : vv)
-                    })}
-                    placeholder="value"
-                    className="input text-[12px]"
-                    style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4 }}
-                  />
+                  <input value={v.key}
+                    onChange={e => updateEnvironment(activeEnv.id, { variables: activeEnv.variables.map(vv => vv.id === v.id ? { ...vv, key: e.target.value } : vv) })}
+                    placeholder="variable_name" className="input text-[12px]"
+                    style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4 }} />
+                  <input value={v.value}
+                    onChange={e => updateEnvironment(activeEnv.id, { variables: activeEnv.variables.map(vv => vv.id === v.id ? { ...vv, value: e.target.value } : vv) })}
+                    placeholder="value" className="input text-[12px]"
+                    style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4 }} />
                   <div className="flex items-center gap-0.5">
-                    <button
-                      onClick={() => updateEnvironment(activeEnv.id, {
-                        variables: activeEnv.variables.map(vv => vv.id === v.id ? { ...vv, enabled: !vv.enabled } : vv)
-                      })}
-                      className="btn-icon"
-                      style={{ width: '22px', height: '22px', fontSize: '10px', color: v.enabled ? 'var(--success)' : 'var(--text-faint)' }}
-                    >{v.enabled ? '✓' : '○'}</button>
-                    <button
-                      onClick={() => updateEnvironment(activeEnv.id, {
-                        variables: activeEnv.variables.filter(vv => vv.id !== v.id)
-                      })}
-                      className="btn-icon"
-                      style={{ width: '22px', height: '22px', fontSize: '10px', color: 'var(--danger)' }}
-                    >✕</button>
+                    <button onClick={() => updateEnvironment(activeEnv.id, { variables: activeEnv.variables.map(vv => vv.id === v.id ? { ...vv, enabled: !vv.enabled } : vv) })}
+                      className="btn-icon" style={{ width: '22px', height: '22px', fontSize: '10px', color: v.enabled ? 'var(--success)' : 'var(--text-faint)' }}>{v.enabled ? '✓' : '○'}</button>
+                    <button onClick={() => updateEnvironment(activeEnv.id, { variables: activeEnv.variables.filter(vv => vv.id !== v.id) })}
+                      className="btn-icon" style={{ width: '22px', height: '22px', fontSize: '10px', color: 'var(--danger)' }}>✕</button>
                   </div>
                 </div>
               ))}
 
               {envTab !== 'global' && activeEnv && (
-                <button
-                  onClick={() => updateEnvironment(activeEnv.id, {
-                    variables: [...activeEnv.variables, createKVPair()]
-                  })}
-                  className="text-[11px] font-medium"
-                  style={{ color: 'var(--text-faint)' }}>+ Add Variable</button>
+                <button onClick={() => updateEnvironment(activeEnv.id, { variables: [...activeEnv.variables, createKVPair()] })}
+                  className="text-[11px] font-medium" style={{ color: 'var(--text-faint)' }}>+ Add Variable</button>
               )}
             </div>
           </div>
@@ -452,36 +419,39 @@ export default function Sidebar() {
   );
 }
 
-// Collection Item sub-component
-function CollectionItem({
-  collection, isActive, onSelect, onDelete, onLoadReq, onDeleteReq, onRename,
-  editingColId, setEditingColId, editingColName, setEditingColName,
+// ═══════════════════════════════════════════════════════════
+// CollectionNode — renders a collection with tree items inside
+// ═══════════════════════════════════════════════════════════
+
+function CollectionNode({
+  collection, isActive, onSelect, onDelete, onRename,
+  expandedFolders, toggleFolder, editingItemId, editingItemName, setEditingItemId, setEditingItemName,
 }: {
-  collection: { id: string; name: string; requests: any[]; variables: any[] };
+  collection: Collection;
   isActive: boolean;
   onSelect: () => void;
   onDelete: () => void;
-  onLoadReq: (reqId: string) => void;
-  onDeleteReq: (reqId: string) => void;
   onRename: (newName: string) => void;
-  editingColId: string | null;
-  setEditingColId: (id: string | null) => void;
-  editingColName: string;
-  setEditingColName: (name: string) => void;
+  expandedFolders: Set<string>;
+  toggleFolder: (id: string) => void;
+  editingItemId: string | null;
+  editingItemName: string;
+  setEditingItemId: (id: string | null) => void;
+  setEditingItemName: (name: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
   const startRename = () => {
-    setEditingColId(collection.id);
-    setEditingColName(collection.name);
+    setEditingItemId(collection.id);
+    setEditingItemName(collection.name);
   };
 
   const commitRename = () => {
-    if (editingColName.trim()) {
-      onRename(editingColName.trim());
-    }
-    setEditingColId(null);
+    if (editingItemName.trim()) onRename(editingItemName.trim());
+    setEditingItemId(null);
   };
+
+  const items = collection.items || [];
 
   return (
     <div
@@ -491,91 +461,202 @@ function CollectionItem({
         border: isActive ? '1px solid var(--accent-primary)' : '1px solid transparent',
       }}
     >
+      {/* Collection header */}
       <div
         className="flex items-center justify-between p-2 cursor-pointer"
         onClick={() => { onSelect(); setExpanded(!expanded); }}
       >
         <div className="flex items-center gap-1.5 min-w-0">
+          <span style={{ fontSize: '9px', color: 'var(--text-faint)' }}>{expanded ? '▾' : '▸'}</span>
           <span className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
             {collection.name}
           </span>
           {collection.variables.length > 0 && (
-            <span
-              className="text-[9px] px-1 rounded-full"
-              style={{ background: 'var(--info)', color: '#fff' }}
-            >
+            <span className="text-[9px] px-1 rounded-full" style={{ background: 'var(--info)', color: '#fff' }}>
               {collection.variables.length}
             </span>
           )}
         </div>
         <div className="flex gap-0.5">
-          <button
-            onClick={(e) => { e.stopPropagation(); startRename(); }}
-            className="btn-icon"
-            style={{ width: '20px', height: '20px', fontSize: '10px' }}
-            title="Rename"
-          >✎</button>
-          <button
-            onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            className="btn-icon"
-            style={{ width: '20px', height: '20px', fontSize: '10px', color: 'var(--danger)' }}
-            title="Delete"
-          >✕</button>
+          <button onClick={(e) => { e.stopPropagation(); startRename(); }}
+            className="btn-icon" style={{ width: '20px', height: '20px', fontSize: '10px' }} title="Rename">✎</button>
+          <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            className="btn-icon" style={{ width: '20px', height: '20px', fontSize: '10px', color: 'var(--danger)' }} title="Delete">✕</button>
         </div>
       </div>
 
-      {editingColId === collection.id && (
+      {/* Collection rename input */}
+      {editingItemId === collection.id && (
         <div className="px-2 pb-2">
-          <input
-            value={editingColName}
-            onChange={e => setEditingColName(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && commitRename()}
-            onBlur={commitRename}
-            className="input text-[11px]"
-            style={{ padding: '4px 8px' }}
-            autoFocus
-          />
+          <input value={editingItemName} onChange={e => setEditingItemName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && commitRename()} onBlur={commitRename}
+            className="input text-[11px]" style={{ padding: '4px 8px' }} autoFocus />
         </div>
       )}
 
-      {expanded && editingColId !== collection.id && (
+      {/* Collection items (tree) */}
+      {expanded && editingItemId !== collection.id && (
         <div className="px-2 pb-2 space-y-0.5">
-          {collection.requests.length === 0 && (
-            <p className="text-[10px] py-1" style={{ color: 'var(--text-faint)' }}>No requests</p>
+          {items.length === 0 && (
+            <p className="text-[10px] py-1" style={{ color: 'var(--text-faint)' }}>Empty collection</p>
           )}
-          {collection.requests.map((req: any) => (
-            <div key={req.id} className="flex items-center gap-1 group">
-              <button
-                onClick={() => onLoadReq(req.id)}
-                className="flex-1 text-left flex items-center gap-1 py-1 px-1.5 rounded transition-all"
-                style={{ background: 'transparent' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-              >
-                <span
-                  className="method-badge"
-                  style={{
-                    background: METHOD_COLORS[req.method as HttpMethod] + '22',
-                    color: METHOD_COLORS[req.method as HttpMethod],
-                    fontSize: '8px',
-                    padding: '1px 4px',
-                  }}
-                >
-                  {req.method}
-                </span>
-                <span className="text-[10px] truncate" style={{ color: 'var(--text-secondary)' }}>
-                  {req.name || 'Untitled'}
-                </span>
-              </button>
-              <button
-                onClick={() => onDeleteReq(req.id)}
-                className="btn-icon opacity-0 group-hover:opacity-100"
-                style={{ width: '18px', height: '18px', fontSize: '8px', color: 'var(--danger)' }}
-              >✕</button>
-            </div>
+          {items.map(item => (
+            <TreeNode
+              key={item.id}
+              item={item}
+              collectionId={collection.id}
+              depth={0}
+              expandedFolders={expandedFolders}
+              toggleFolder={toggleFolder}
+              editingItemId={editingItemId}
+              editingItemName={editingItemName}
+              setEditingItemId={setEditingItemId}
+              setEditingItemName={setEditingItemName}
+            />
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// TreeNode — recursive tree renderer for folders & requests
+// ═══════════════════════════════════════════════════════════
+
+function TreeNode({
+  item, collectionId, depth,
+  expandedFolders, toggleFolder, editingItemId, editingItemName, setEditingItemId, setEditingItemName,
+}: {
+  item: CollectionItem;
+  collectionId: string;
+  depth: number;
+  expandedFolders: Set<string>;
+  toggleFolder: (id: string) => void;
+  editingItemId: string | null;
+  editingItemName: string;
+  setEditingItemId: (id: string | null) => void;
+  setEditingItemName: (name: string) => void;
+}) {
+  const { loadFromCollectionItem, deleteFromCollectionItem, renameCollectionItem } = usePlaygroundStore();
+
+  if (item.type === 'folder') {
+    const expanded = expandedFolders.has(item.id);
+
+    const startRename = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setEditingItemId(item.id);
+      setEditingItemName(item.name);
+    };
+
+    const commitRename = () => {
+      if (editingItemName.trim()) renameCollectionItem(collectionId, item.id, editingItemName.trim());
+      setEditingItemId(null);
+    };
+
+    const handleDelete = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (confirm(`Delete folder "${item.name}" and all its contents?`)) {
+        deleteFromCollectionItem(collectionId, item.id);
+      }
+    };
+
+    return (
+      <div>
+        {/* Folder header */}
+        <div
+          className="flex items-center gap-1 py-1 px-1.5 rounded cursor-pointer group"
+          style={{ paddingLeft: `${depth * 12 + 6}px`, background: 'transparent' }}
+          onClick={() => toggleFolder(item.id)}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+        >
+          <span style={{ fontSize: '9px', color: 'var(--text-faint)' }}>{expanded ? '▾' : '▸'}</span>
+          <span style={{ fontSize: '11px' }}>📁</span>
+
+          {editingItemId === item.id ? (
+            <input
+              value={editingItemName}
+              onChange={e => setEditingItemName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && commitRename()}
+              onBlur={commitRename}
+              className="input text-[11px] flex-1"
+              style={{ padding: '2px 6px' }}
+              autoFocus
+              onClick={e => e.stopPropagation()}
+            />
+          ) : (
+            <span className="text-[11px] font-medium truncate flex-1" style={{ color: 'var(--text-secondary)' }}>
+              {item.name}
+            </span>
+          )}
+
+          <button onClick={startRename} className="btn-icon opacity-0 group-hover:opacity-100"
+            style={{ width: '16px', height: '16px', fontSize: '8px' }} title="Rename">✎</button>
+          <button onClick={handleDelete} className="btn-icon opacity-0 group-hover:opacity-100"
+            style={{ width: '16px', height: '16px', fontSize: '8px', color: 'var(--danger)' }} title="Delete">✕</button>
+        </div>
+
+        {/* Folder children */}
+        {expanded && (
+          <div>
+            {item.items.length === 0 && (
+              <p className="text-[10px] py-1" style={{ color: 'var(--text-faint)', paddingLeft: `${(depth + 1) * 12 + 24}px` }}>
+                Empty folder
+              </p>
+            )}
+            {item.items.map(child => (
+              <TreeNode
+                key={child.id}
+                item={child}
+                collectionId={collectionId}
+                depth={depth + 1}
+                expandedFolders={expandedFolders}
+                toggleFolder={toggleFolder}
+                editingItemId={editingItemId}
+                editingItemName={editingItemName}
+                setEditingItemId={setEditingItemId}
+                setEditingItemName={setEditingItemName}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Request item ──
+  const req = item.request;
+
+  return (
+    <div className="flex items-center gap-1 group" style={{ paddingLeft: `${depth * 12 + 6}px` }}>
+      <button
+        onClick={() => loadFromCollectionItem(collectionId, item.id)}
+        className="flex-1 text-left flex items-center gap-1 py-1 px-1.5 rounded transition-all"
+        style={{ background: 'transparent' }}
+        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
+        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+      >
+        <span
+          className="method-badge"
+          style={{
+            background: METHOD_COLORS[req.method as HttpMethod] + '22',
+            color: METHOD_COLORS[req.method as HttpMethod],
+            fontSize: '8px',
+            padding: '1px 4px',
+          }}
+        >
+          {req.method}
+        </span>
+        <span className="text-[10px] truncate" style={{ color: 'var(--text-secondary)' }}>
+          {req.name || 'Untitled'}
+        </span>
+      </button>
+      <button
+        onClick={() => deleteFromCollectionItem(collectionId, item.id)}
+        className="btn-icon opacity-0 group-hover:opacity-100"
+        style={{ width: '18px', height: '18px', fontSize: '8px', color: 'var(--danger)' }}
+      >✕</button>
     </div>
   );
 }

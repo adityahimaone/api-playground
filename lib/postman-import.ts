@@ -1,9 +1,12 @@
 /**
  * Postman Collection v2.1.0 Importer
- * Converts Postman JSON format → API Playground internal format
+ * Converts Postman JSON format → API Playground tree-based format
  */
 
-import { ApiRequest, Collection, createKVPair, createRequest, HttpMethod, KVPair } from './types';
+import {
+  ApiRequest, Collection, CollectionItem, CollectionFolder, CollectionRequestItem,
+  createKVPair, createRequest, createFolder, createRequestItem, HttpMethod, KVPair
+} from './types';
 
 // ── Postman v2.1.0 types (subset we need) ──
 
@@ -54,8 +57,6 @@ interface PostmanResponse {
   originalRequest?: PostmanRequest;
   status?: string;
   code?: number;
-  _postman_previewlanguage?: string;
-  header?: PostmanHeader[];
   body?: string;
 }
 
@@ -64,10 +65,6 @@ interface PostmanItem {
   item?: PostmanItem[];  // nested folder
   request?: PostmanRequest;
   response?: PostmanResponse[];
-  event?: Array<{
-    listen: string;
-    script?: { exec?: string[] };
-  }>;
 }
 
 interface PostmanCollection {
@@ -151,47 +148,28 @@ function resolveAuth(auth?: PostmanRequest['auth']): ApiRequest['auth'] {
   switch (auth.type) {
     case 'bearer': {
       const tokenEntry = auth.bearer?.find(b => b.key === 'token');
-      return {
-        type: 'bearer',
-        token: tokenEntry?.value || '',
-        username: '',
-        password: '',
-      };
+      return { type: 'bearer', token: tokenEntry?.value || '', username: '', password: '' };
     }
     case 'basic': {
       const userEntry = auth.basic?.find(b => b.key === 'username');
       const passEntry = auth.basic?.find(b => b.key === 'password');
-      return {
-        type: 'basic',
-        token: '',
-        username: userEntry?.value || '',
-        password: passEntry?.value || '',
-      };
+      return { type: 'basic', token: '', username: userEntry?.value || '', password: passEntry?.value || '' };
     }
     default:
       return { type: 'none', token: '', username: '', password: '' };
   }
 }
 
-// ── Main converter ──
+// ── Convert a Postman request to internal format ──
 
-function convertPostmanItem(item: PostmanItem): ApiRequest[] {
-  // If it's a folder (has nested items), flatten recursively
-  if (item.item && item.item.length > 0) {
-    return item.item.flatMap(child => convertPostmanItem(child));
-  }
-
-  // If it's a request (has `request` property)
-  if (!item.request) return [];
-
-  const req = item.request;
+function convertPostmanRequest(req: PostmanRequest, name: string): ApiRequest {
   const urlStr = parseUrlToString(req.url);
   const { bodyType, body } = resolveBodyType(req.body);
   const auth = resolveAuth(req.auth);
 
-  const apiReq: ApiRequest = {
+  return {
     id: Math.random().toString(36).slice(2, 10),
-    name: item.name || 'Imported Request',
+    name,
     method: methodFromString(req.method),
     url: urlStr,
     params: postmanParamsToKV(req.url),
@@ -201,8 +179,30 @@ function convertPostmanItem(item: PostmanItem): ApiRequest[] {
     formData: [createKVPair()],
     auth,
   };
+}
 
-  return [apiReq];
+// ── Convert Postman items → tree-based CollectionItems ──
+
+function convertPostmanItems(items: PostmanItem[]): CollectionItem[] {
+  const result: CollectionItem[] = [];
+
+  for (const item of items) {
+    if (item.item && item.item.length > 0) {
+      // This is a folder
+      result.push({
+        type: 'folder',
+        id: Math.random().toString(36).slice(2, 10),
+        name: item.name || 'Unnamed Folder',
+        items: convertPostmanItems(item.item), // recurse
+      });
+    } else if (item.request) {
+      // This is a request
+      const apiReq = convertPostmanRequest(item.request, item.name || 'Imported Request');
+      result.push(createRequestItem(apiReq));
+    }
+  }
+
+  return result;
 }
 
 // ── Public API ──
@@ -221,7 +221,8 @@ export interface PostmanImportResult {
 
 /**
  * Parse a Postman Collection v2.1.0 JSON string and convert to API Playground format.
- * Each top-level folder → one Collection. Requests at root → "Root Requests" collection.
+ * Each top-level folder → one Collection (with nested tree structure).
+ * Root requests → added to the first collection.
  */
 export function importPostmanCollection(json: string): PostmanImportResult {
   const result: PostmanImportResult = {
@@ -235,14 +236,15 @@ export function importPostmanCollection(json: string): PostmanImportResult {
   try {
     const data = JSON.parse(json);
 
-    // Validate it's a Postman collection
-    if (!data.info?.schema) {
-      result.errors.push('Not a Postman collection — missing info.schema');
+    // Validate it's a Postman collection — be more lenient
+    if (!data.info) {
+      result.errors.push('Not a Postman collection — missing info object');
       return result;
     }
 
-    if (!data.info.schema.includes('v2.1')) {
-      result.errors.push(`Schema "${data.info.schema}" — expected v2.1.0, attempting anyway`);
+    if (!data.item || !Array.isArray(data.item) || data.item.length === 0) {
+      result.errors.push('Not a Postman collection — missing or empty item array');
+      return result;
     }
 
     // Convert collection-level variables
@@ -253,58 +255,39 @@ export function importPostmanCollection(json: string): PostmanImportResult {
       result.stats.topLevelVariables = result.variables.length;
     }
 
-    // Process top-level items
-    const rootRequests: ApiRequest[] = [];
-
-    for (const item of (data.item || [])) {
-      if (item.item && item.item.length > 0) {
-        // This is a folder → becomes a Collection
-        result.stats.totalFolders++;
-        const requests = convertPostmanItem(item);
-        result.stats.totalRequests += requests.length;
-
-        result.collections.push({
-          id: Math.random().toString(36).slice(2, 10),
-          name: item.name || 'Unnamed Folder',
-          requests,
-          variables: [],
-        });
-      } else if (item.request) {
-        // Standalone request at root level
-        const requests = convertPostmanItem(item);
-        rootRequests.push(...requests);
-        result.stats.totalRequests += requests.length;
+    // Count items for stats
+    function countPostmanItems(items: PostmanItem[]): { folders: number; requests: number } {
+      let folders = 0;
+      let requests = 0;
+      for (const item of items) {
+        if (item.item && item.item.length > 0) {
+          folders++;
+          const sub = countPostmanItems(item.item);
+          folders += sub.folders;
+          requests += sub.requests;
+        } else if (item.request) {
+          requests++;
+        }
       }
+      return { folders, requests };
     }
 
-    // If there are root-level requests, bundle them into a collection
-    if (rootRequests.length > 0) {
-      result.collections.unshift({
-        id: Math.random().toString(36).slice(2, 10),
-        name: data.info.name || 'Root Requests',
-        requests: rootRequests,
-        variables: result.variables,
-      });
-    }
+    const stats = countPostmanItems(data.item);
+    result.stats.totalFolders = stats.folders;
+    result.stats.totalRequests = stats.requests;
 
-    // If no folders found but collection has requests at root level only
-    if (result.collections.length === 0 && data.item?.length > 0) {
-      const allRequests: ApiRequest[] = [];
-      for (const item of data.item) {
-        allRequests.push(...convertPostmanItem(item));
-      }
-      if (allRequests.length > 0) {
-        result.collections.push({
-          id: Math.random().toString(36).slice(2, 10),
-          name: data.info.name || 'Imported Collection',
-          requests: allRequests,
-          variables: result.variables,
-        });
-        result.stats.totalRequests = allRequests.length;
-      }
-    }
+    // Convert all items to tree-based collection items
+    const treeItems = convertPostmanItems(data.item);
 
-    result.success = result.collections.length > 0;
+    // Wrap in a single collection
+    result.collections.push({
+      id: Math.random().toString(36).slice(2, 10),
+      name: data.info.name || 'Imported Collection',
+      items: treeItems,
+      variables: result.variables,
+    });
+
+    result.success = true;
   } catch (err: any) {
     result.errors.push(`Parse error: ${err.message}`);
   }
@@ -314,11 +297,13 @@ export function importPostmanCollection(json: string): PostmanImportResult {
 
 /**
  * Detect if a JSON string looks like a Postman collection
+ * Be lenient — check for info + item array pattern
  */
 export function isPostmanCollection(json: string): boolean {
   try {
     const data = JSON.parse(json);
-    return !!(data.info?.schema?.includes('v2.1') || data.info?.schema?.includes('v2.0'));
+    // Check for Postman structure: info object with name, item array
+    return !!(data.info && data.item && Array.isArray(data.item));
   } catch {
     return false;
   }

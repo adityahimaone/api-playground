@@ -34,10 +34,27 @@ export interface ApiResponse {
   size: number;
 }
 
+// ── Tree-based collection items ──
+
+export interface CollectionFolder {
+  type: 'folder';
+  id: string;
+  name: string;
+  items: CollectionItem[];
+}
+
+export interface CollectionRequestItem {
+  type: 'request';
+  id: string;
+  request: ApiRequest;
+}
+
+export type CollectionItem = CollectionFolder | CollectionRequestItem;
+
 export interface Collection {
   id: string;
   name: string;
-  requests: ApiRequest[];
+  items: CollectionItem[];
   variables: KVPair[];
 }
 
@@ -73,13 +90,15 @@ export const METHOD_COLORS: Record<HttpMethod, string> = {
   OPTIONS: 'var(--method-options)',
 };
 
+const genId = () => Math.random().toString(36).slice(2, 10);
+
 export function createKVPair(key = '', value = '', enabled = true): KVPair {
-  return { key, value, enabled, id: Math.random().toString(36).slice(2, 10) };
+  return { key, value, enabled, id: genId() };
 }
 
 export function createRequest(name = 'New Request'): ApiRequest {
   return {
-    id: Math.random().toString(36).slice(2, 10),
+    id: genId(),
     name,
     method: 'GET',
     url: '',
@@ -92,9 +111,17 @@ export function createRequest(name = 'New Request'): ApiRequest {
   };
 }
 
+export function createFolder(name: string): CollectionFolder {
+  return { type: 'folder', id: genId(), name, items: [] };
+}
+
+export function createRequestItem(request: ApiRequest): CollectionRequestItem {
+  return { type: 'request', id: genId(), request };
+}
+
 export function createWorkspace(name: string): Workspace {
   return {
-    id: Math.random().toString(36).slice(2, 10),
+    id: genId(),
     name,
     collections: [],
     createdAt: new Date().toISOString(),
