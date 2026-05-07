@@ -14,6 +14,7 @@ import {
   createVariableEntity,
   Environment,
   VariableScope,
+  VARIABLE_SCOPE_COLORS,
 } from '@/lib/entities';
 import { importPostmanCollection } from '@/lib/services/import-postman.service';
 import { exportToPostman } from '@/lib/services/export-postman.service';
@@ -48,7 +49,6 @@ export default function Sidebar() {
   const [selectedEnvTab, setSelectedEnvTab] = useState<string>('global');
   const [newEnvName, setNewEnvName] = useState('');
   const [envVariables, setEnvVariables] = useState<VariableEntity[]>([]);
-  const [revealedSecrets, setRevealedSecrets] = useState<Set<string>>(new Set());
 
   // Editing state
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
@@ -321,15 +321,6 @@ export default function Sidebar() {
     notifyVariablesChanged();
   };
 
-  const toggleSecretReveal = (varId: string) => {
-    setRevealedSecrets((prev) => {
-      const next = new Set(prev);
-      if (next.has(varId)) next.delete(varId);
-      else next.add(varId);
-      return next;
-    });
-  };
-
   const activeEnv = environments.find((e) => e.id === activeEnvId);
 
   // Helper to get tab label
@@ -588,85 +579,92 @@ export default function Sidebar() {
               );
             })()}
 
+            {/* ── Scope Active Toggles ── */}
+            {(() => {
+              const { activeVariableScopes, toggleVariableScope } = useUIStore();
+              const SCOPE_DEFS: { scope: VariableScope; label: string }[] = [
+                { scope: 'global', label: 'Global' },
+                { scope: 'environment', label: 'Env' },
+                { scope: 'collection', label: 'Coll' },
+                { scope: 'local', label: 'Local' },
+              ];
+              return (
+                <div className="flex items-center gap-1 mb-3 flex-wrap">
+                  <span className="text-[9px] font-semibold uppercase tracking-wider mr-1" style={{ color: 'var(--text-faint)' }}>Active:</span>
+                  {SCOPE_DEFS.map(({ scope, label }) => {
+                    const isActive = activeVariableScopes[scope];
+                    const color = VARIABLE_SCOPE_COLORS[scope];
+                    return (
+                      <button
+                        key={scope}
+                        onClick={() => toggleVariableScope(scope)}
+                        className="flex items-center gap-1 text-[9px] font-medium rounded-full px-2 py-0.5 transition-all"
+                        style={{
+                          background: isActive ? `${color}20` : 'var(--bg-hover)',
+                          color: isActive ? color : 'var(--text-faint)',
+                          border: `1.5px solid ${isActive ? color : 'transparent'}`,
+                          cursor: 'pointer',
+                          opacity: isActive ? 1 : 0.5,
+                        }}
+                      >
+                        <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: isActive ? color : 'var(--text-faint)' }} />
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+
             {/* ── Variables Table ── */}
             <div className="space-y-1">
               <div className="flex gap-1 text-[10px] font-semibold uppercase tracking-wider items-center" style={{ color: 'var(--text-faint)' }}>
+                <span style={{ width: '4px', flexShrink: 0 }}></span>
                 <span style={{ width: '80px', flexShrink: 0 }}>Key</span>
-                <span style={{ width: '70px', flexShrink: 0 }}>Initial</span>
-                <span style={{ flex: 1 }}>Current</span>
-                <span style={{ width: '22px', flexShrink: 0 }}></span>
+                <span style={{ flex: 1 }}>Value</span>
                 <span style={{ width: '22px', flexShrink: 0 }}></span>
                 <span style={{ width: '22px', flexShrink: 0 }}></span>
               </div>
-              {envVariables.map((v) => (
-                <div key={v.id} className="flex gap-1 items-center">
-                  <input
-                    value={v.key}
-                    onChange={(e) => updateVariable(v.id, { key: e.target.value })}
-                    placeholder="variable_name"
-                    className="input text-[12px]"
-                    style={{ padding: '5px 6px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, width: '80px', flexShrink: 0 }}
-                  />
-                  <input
-                    value={v.initialValue}
-                    onChange={(e) => updateVariable(v.id, { initialValue: e.target.value })}
-                    placeholder="initial"
-                    className="input text-[12px]"
-                    style={{ padding: '5px 6px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 0.6 : 0.35, width: '70px', flexShrink: 0 }}
-                  />
-                  <div className="flex items-center flex-1 min-w-0">
-                    {v.secret && !revealedSecrets.has(v.id) ? (
-                      <input
-                        value="********"
-                        readOnly
-                        className="input text-[12px]"
-                        style={{ padding: '5px 6px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, flex: 1 }}
-                      />
-                    ) : (
-                      <input
-                        value={v.currentValue}
-                        onChange={(e) => updateVariable(v.id, { currentValue: e.target.value })}
-                        placeholder="value"
-                        className="input text-[12px]"
-                        style={{ padding: '5px 6px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, flex: 1 }}
-                      />
-                    )}
+              {envVariables.map((v) => {
+                const scopeColor = VARIABLE_SCOPE_COLORS[v.scope] || '#6b7280';
+                return (
+                  <div key={v.id} className="flex gap-1 items-center">
+                    <span
+                      className="inline-block w-1 rounded-full self-stretch flex-shrink-0"
+                      style={{ background: scopeColor, minHeight: '22px' }}
+                      title={`${v.scope} scope`}
+                    />
+                    <input
+                      value={v.key}
+                      onChange={(e) => updateVariable(v.id, { key: e.target.value })}
+                      placeholder="variable_name"
+                      className="input text-[12px]"
+                      style={{ padding: '5px 6px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, width: '80px', flexShrink: 0 }}
+                    />
+                    <input
+                      value={v.currentValue}
+                      onChange={(e) => updateVariable(v.id, { currentValue: e.target.value })}
+                      placeholder="value"
+                      className="input text-[12px]"
+                      style={{ padding: '5px 6px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, flex: 1 }}
+                    />
+                    <div className="flex items-center gap-0.5">
+                      <button
+                        onClick={() => updateVariable(v.id, { enabled: !v.enabled })}
+                        className="btn-icon"
+                        style={{ width: '22px', height: '22px', fontSize: '10px', color: v.enabled ? 'var(--success)' : 'var(--text-faint)' }}
+                      >
+                        {v.enabled ? '✓' : '○'}
+                      </button>
+                      <button
+                        onClick={() => deleteVariable(v.id)}
+                        className="btn-icon"
+                        style={{ width: '22px', height: '22px', fontSize: '10px', color: 'var(--danger)' }}
+                      >✕</button>
+                    </div>
                   </div>
-                  <button
-                    onClick={() => updateVariable(v.id, { secret: !v.secret })}
-                    className="btn-icon"
-                    style={{ width: '22px', height: '22px', fontSize: '10px', color: v.secret ? 'var(--warning)' : 'var(--text-faint)' }}
-                    title={v.secret ? 'Mark as not secret' : 'Mark as secret'}
-                  >
-                    {v.secret ? '🔒' : '🔓'}
-                  </button>
-                  {v.secret && (
-                    <button
-                      onClick={() => toggleSecretReveal(v.id)}
-                      className="btn-icon"
-                      style={{ width: '22px', height: '22px', fontSize: '10px', color: 'var(--text-muted)' }}
-                      title={revealedSecrets.has(v.id) ? 'Hide value' : 'Reveal value'}
-                    >
-                      {revealedSecrets.has(v.id) ? '👁‍🗨' : '👁'}
-                    </button>
-                  )}
-                  {!v.secret && <span style={{ width: '22px', flexShrink: 0 }}></span>}
-                  <div className="flex items-center gap-0.5">
-                    <button
-                      onClick={() => updateVariable(v.id, { enabled: !v.enabled })}
-                      className="btn-icon"
-                      style={{ width: '22px', height: '22px', fontSize: '10px', color: v.enabled ? 'var(--success)' : 'var(--text-faint)' }}
-                    >
-                      {v.enabled ? '✓' : '○'}
-                    </button>
-                    <button
-                      onClick={() => deleteVariable(v.id)}
-                      className="btn-icon"
-                      style={{ width: '22px', height: '22px', fontSize: '10px', color: 'var(--danger)' }}
-                    >✕</button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
               {envVariables.length === 0 && (
                 <p className="text-[11px]" style={{ color: 'var(--text-faint)' }}>
                   {selectedEnvTab === 'global'
