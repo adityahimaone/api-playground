@@ -38,7 +38,14 @@ export interface Collection {
   id: string;
   name: string;
   requests: ApiRequest[];
-  variables: KVPair[];  // Per-collection variables
+  variables: KVPair[];
+}
+
+export interface Workspace {
+  id: string;
+  name: string;
+  collections: Collection[];
+  createdAt: string;
 }
 
 export interface Environment {
@@ -82,5 +89,14 @@ export function createRequest(name = 'New Request'): ApiRequest {
     body: '',
     formData: [createKVPair()],
     auth: { type: 'none', token: '', username: '', password: '' },
+  };
+}
+
+export function createWorkspace(name: string): Workspace {
+  return {
+    id: Math.random().toString(36).slice(2, 10),
+    name,
+    collections: [],
+    createdAt: new Date().toISOString(),
   };
 }

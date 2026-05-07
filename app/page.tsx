@@ -6,18 +6,17 @@ import ResponseViewer from '@/components/response-viewer';
 import VariablesModal from '@/components/variables-modal';
 import SaveToCollectionModal from '@/components/save-modal';
 import { usePlaygroundStore } from '@/lib/store';
-import { FEATURES } from '@/lib/features';
 import { useState, useEffect } from 'react';
 
 export default function Home() {
-  const { response, loading } = usePlaygroundStore();
+  const { response, loading, workspaces, activeWorkspaceId, setActiveWorkspaceId } = usePlaygroundStore();
   const [showVarsModal, setShowVarsModal] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [colorTheme, setColorTheme] = useState<'light' | 'dark'>('light');
   const [authEnabled, setAuthEnabled] = useState(false);
 
-  // Load theme from localStorage
+  // Load theme + init workspace from localStorage
   useEffect(() => {
     const saved = localStorage.getItem('api-theme') as 'light' | 'dark' | null;
     if (saved) {
@@ -26,6 +25,11 @@ export default function Home() {
     }
     const savedAuth = localStorage.getItem('api-feature-auth');
     setAuthEnabled(savedAuth === 'true');
+
+    // Auto-select first workspace if none selected
+    if (!activeWorkspaceId && workspaces.length > 0) {
+      setActiveWorkspaceId(workspaces[0].id);
+    }
   }, []);
 
   const toggleTheme = () => {

@@ -7,41 +7,63 @@ import { useState, useRef } from 'react';
 export default function Sidebar() {
   const {
     sidebarTab, setSidebarTab,
-    collections, deleteCollection, loadFromCollection, deleteFromCollection, renameCollection,
+    workspaces, activeWorkspaceId, setActiveWorkspaceId, addWorkspace, deleteWorkspace, renameWorkspace,
     history, clearHistory, loadFromHistory,
     globalVariables, addGlobalVariable, updateGlobalVariable, toggleGlobalVariable, deleteGlobalVariable,
     environments, activeEnvId, setActiveEnvId, addEnvironment, deleteEnvironment, updateEnvironment,
     activeCollectionId, setActiveCollectionId,
-    exportCollection, exportAllCollections, importCollection,
+    deleteCollection, renameCollection, loadFromCollection, deleteFromCollection,
+    exportWorkspace, exportAllWorkspaces, importWorkspace,
   } = usePlaygroundStore();
+
   const [newColName, setNewColName] = useState('');
   const [adding, setAdding] = useState(false);
   const [newEnvName, setNewEnvName] = useState('');
   const [envTab, setEnvTab] = useState<string>('global');
   const [editingColId, setEditingColId] = useState<string | null>(null);
   const [editingColName, setEditingColName] = useState('');
+  const [editingWsId, setEditingWsId] = useState<string | null>(null);
+  const [editingWsName, setEditingWsName] = useState('');
+  const [showWsMenu, setShowWsMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const ws = workspaces.find(w => w.id === activeWorkspaceId);
+  const collections = ws?.collections || [];
+  const activeEnv = environments.find(e => e.id === activeEnvId);
+
+  // --- Collection helpers ---
   const addCol = () => {
-    if (newColName.trim()) {
+    if (newColName.trim() && activeWorkspaceId) {
       usePlaygroundStore.getState().addCollection(newColName.trim());
       setNewColName('');
       setAdding(false);
     }
   };
 
-  const activeEnv = environments.find(e => e.id === activeEnvId);
-
-  // --- Import / Export handlers ---
-  const handleExportAll = () => {
-    const json = exportAllCollections();
-    downloadJson(json, 'api-playground-collections.json');
+  // --- Workspace helpers ---
+  const startRenameWs = (wsId: string) => {
+    setEditingWsId(wsId);
+    const w = workspaces.find(w => w.id === wsId);
+    setEditingWsName(w?.name || '');
   };
 
-  const handleExportSingle = (collectionId: string) => {
-    const json = exportCollection(collectionId);
-    const col = collections.find(c => c.id === collectionId);
-    downloadJson(json, `${col?.name || 'collection'}.json`);
+  const commitRenameWs = () => {
+    if (editingWsId && editingWsName.trim()) {
+      renameWorkspace(editingWsId, editingWsName.trim());
+    }
+    setEditingWsId(null);
+  };
+
+  // --- Import / Export ---
+  const handleExportWs = () => {
+    if (!activeWorkspaceId) return;
+    const json = exportWorkspace(activeWorkspaceId);
+    downloadJson(json, `${ws?.name || 'workspace'}.json`);
+  };
+
+  const handleExportAll = () => {
+    const json = exportAllWorkspaces();
+    downloadJson(json, 'api-playground-all.json');
   };
 
   const downloadJson = (json: string, filename: string) => {
@@ -60,14 +82,11 @@ export default function Sidebar() {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const text = ev.target?.result as string;
-      if (importCollection(text)) {
-        // success — store already updated
-      } else {
-        alert('Invalid file format. Expected API Playground export file.');
+      if (!importWorkspace(text)) {
+        alert('Invalid file format.');
       }
     };
     reader.readAsText(file);
-    // Reset input so same file can be re-imported
     e.target.value = '';
   };
 
@@ -76,6 +95,101 @@ export default function Sidebar() {
       className="w-64 shrink-0 flex flex-col"
       style={{ borderRight: '1px solid var(--border-subtle)', background: 'var(--bg-sidebar)' }}
     >
+      {/* Workspace selector */}
+      <div className="px-3 py-2" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+        <div className="flex items-center justify-between">
+          {editingWsId === activeWorkspaceId ? (
+            <input
+              value={editingWsName}
+              onChange={e => setEditingWsName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && commitRenameWs()}
+              onBlur={commitRenameWs}
+              className="input text-[12px] font-semibold"
+              style={{ padding: '3px 8px', flex: 1 }}
+              autoFocus
+            />
+          ) : (
+            <button
+              onClick={() => setShowWsMenu(!showWsMenu)}
+              className="flex items-center gap-1.5 text-[12px] font-semibold"
+              style={{ color: 'var(--text-primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+            >
+              <span className="truncate">{ws?.name || 'No Workspace'}</span>
+              <span style={{ color: 'var(--text-faint)', fontSize: '10px' }}>▾</span>
+            </button>
+          )}
+          <div className="flex gap-0.5">
+            <button
+              onClick={() => addWorkspace('New Workspace')}
+              className="btn-icon"
+              style={{ width: '22px', height: '22px', fontSize: '13px' }}
+              title="New workspace"
+            >+</button>
+            <button
+              onClick={handleExportWs}
+              className="btn-icon"
+              style={{ width: '22px', height: '22px', fontSize: '11px' }}
+              title="Export workspace"
+              disabled={!activeWorkspaceId}
+            >↑</button>
+          </div>
+        </div>
+
+        {/* Workspace dropdown */}
+        {showWsMenu && (
+          <div className="mt-2 space-y-1">
+            {workspaces.map(w => (
+              <div
+                key={w.id}
+                className="flex items-center gap-1 p-1.5 rounded-md cursor-pointer"
+                style={{
+                  background: w.id === activeWorkspaceId ? 'var(--accent-primary-soft)' : 'transparent',
+                  border: w.id === activeWorkspaceId ? '1px solid var(--accent-primary)' : '1px solid transparent',
+                }}
+                onClick={() => { setActiveWorkspaceId(w.id); setShowWsMenu(false); }}
+              >
+                <span className="flex-1 text-[11px] truncate" style={{ color: 'var(--text-primary)' }}>{w.name}</span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); startRenameWs(w.id); setShowWsMenu(false); }}
+                  className="btn-icon"
+                  style={{ width: '18px', height: '18px', fontSize: '9px' }}
+                >✎</button>
+                {workspaces.length > 1 && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); deleteWorkspace(w.id); setShowWsMenu(false); }}
+                    className="btn-icon"
+                    style={{ width: '18px', height: '18px', fontSize: '9px', color: 'var(--danger)' }}
+                  >✕</button>
+                )}
+              </div>
+            ))}
+            <div className="flex items-center gap-1 pt-1" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".json"
+                onChange={handleImport}
+                className="hidden"
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="text-[10px] flex-1"
+                style={{ color: 'var(--text-faint)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0' }}
+              >
+                ↓ Import
+              </button>
+              <button
+                onClick={() => { handleExportAll(); setShowWsMenu(false); }}
+                className="text-[10px]"
+                style={{ color: 'var(--text-faint)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0' }}
+              >
+                ↑ Export All
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Tab switcher */}
       <div className="flex" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
         {(['collections', 'history', 'variables'] as const).map(tab => (
@@ -101,30 +215,17 @@ export default function Sidebar() {
           <div className="space-y-2">
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-faint)' }}>Collections</span>
-              <div className="flex gap-1">
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="btn-icon"
-                  style={{ width: '22px', height: '22px', fontSize: '11px' }}
-                  title="Import collection"
-                >↓</button>
-                <button
-                  onClick={handleExportAll}
-                  className="btn-icon"
-                  style={{ width: '22px', height: '22px', fontSize: '11px' }}
-                  title="Export all collections"
-                  disabled={collections.length === 0}
-                >↑</button>
-                <button onClick={() => setAdding(true)} className="btn-icon" style={{ width: '22px', height: '22px', fontSize: '14px' }}>+</button>
-              </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".json"
-                onChange={handleImport}
-                className="hidden"
-              />
+              <button
+                onClick={() => activeWorkspaceId && setAdding(true)}
+                className="btn-icon"
+                style={{ width: '22px', height: '22px', fontSize: '14px' }}
+                disabled={!activeWorkspaceId}
+              >+</button>
             </div>
+
+            {!activeWorkspaceId && (
+              <p className="text-[11px]" style={{ color: 'var(--text-faint)' }}>Select or create a workspace first</p>
+            )}
 
             {adding && (
               <div className="flex gap-1 mb-2">
@@ -141,7 +242,7 @@ export default function Sidebar() {
               </div>
             )}
 
-            {collections.length === 0 && !adding && (
+            {activeWorkspaceId && collections.length === 0 && !adding && (
               <p className="text-[11px]" style={{ color: 'var(--text-faint)' }}>No collections yet</p>
             )}
 
@@ -154,7 +255,6 @@ export default function Sidebar() {
                 onDelete={() => deleteCollection(col.id)}
                 onLoadReq={(reqId) => loadFromCollection(col.id, reqId)}
                 onDeleteReq={(reqId) => deleteFromCollection(col.id, reqId)}
-                onExport={() => handleExportSingle(col.id)}
                 onRename={(newName) => renameCollection(col.id, newName)}
                 editingColId={editingColId}
                 setEditingColId={setEditingColId}
@@ -354,7 +454,7 @@ export default function Sidebar() {
 
 // Collection Item sub-component
 function CollectionItem({
-  collection, isActive, onSelect, onDelete, onLoadReq, onDeleteReq, onExport, onRename,
+  collection, isActive, onSelect, onDelete, onLoadReq, onDeleteReq, onRename,
   editingColId, setEditingColId, editingColName, setEditingColName,
 }: {
   collection: { id: string; name: string; requests: any[]; variables: any[] };
@@ -363,7 +463,6 @@ function CollectionItem({
   onDelete: () => void;
   onLoadReq: (reqId: string) => void;
   onDeleteReq: (reqId: string) => void;
-  onExport: () => void;
   onRename: (newName: string) => void;
   editingColId: string | null;
   setEditingColId: (id: string | null) => void;
@@ -410,12 +509,6 @@ function CollectionItem({
           )}
         </div>
         <div className="flex gap-0.5">
-          <button
-            onClick={(e) => { e.stopPropagation(); onExport(); }}
-            className="btn-icon"
-            style={{ width: '20px', height: '20px', fontSize: '10px' }}
-            title="Export collection"
-          >↑</button>
           <button
             onClick={(e) => { e.stopPropagation(); startRename(); }}
             className="btn-icon"

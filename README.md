@@ -4,6 +4,7 @@ A Postman-like API testing tool — local-first, no account required.
 
 ## Features
 
+- **Workspaces**: Organize collections by project/team
 - **Request Builder**: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS
 - **Headers, Params, Body**: JSON, form-data, x-www-form-urlencoded, raw
 - **Auth**: Bearer token, Basic auth (per-request)
@@ -20,15 +21,17 @@ A Postman-like API testing tool — local-first, no account required.
 - Toggle: enable/disable via Settings ⚙ → Feature switch
 - Currently **off** — all data stays in localStorage
 
-### Phase 2 — Workspaces + Collaboration (PLANNED)
-- Multi-user workspaces (owner/editor/viewer roles)
-- Invite members by email
-- Real-time sync via Supabase
+### Phase 2 — Workspaces (LOCAL-FIRST) ✅
+- Multiple workspaces (create, rename, delete, switch)
+- Collections scoped to workspace
+- Import/Export per-workspace or all at once
+- All data in localStorage (no auth needed)
+- **Future**: sync to Supabase, invite members, roles
 
-### Phase 3 — Variable Scoping + Import/Export (CURRENT)
+### Phase 3 — Variable Scoping + Import/Export ✅
 - **Variable resolution order**: Global < Environment < Collection
 - Per-collection variables (scoped to a collection)
-- Import/Export collections as JSON files
+- Import/Export collections/workspaces as JSON files
 - All data persisted in localStorage (local-first)
 
 ## Stack
@@ -80,21 +83,37 @@ Variables use `{{variable_name}}` syntax. Resolution order:
 
 If the same variable name exists at multiple levels, the **last wins** (collection > env > global).
 
+## Workspaces
+
+Workspaces organize your collections. Each workspace has its own set of collections.
+
+- **Create**: Click + in workspace selector
+- **Switch**: Click workspace name → select from dropdown
+- **Rename**: Click ✎ in dropdown
+- **Delete**: Click ✕ in dropdown (must have >1 workspace)
+- **Export**: Click ↑ in workspace header
+- **Import**: Click ↓ Import in workspace dropdown
+
 ## Import / Export
 
-- Export single collection: click ↑ on collection item in sidebar
-- Export all: click ↑ in collections header
-- Import: click ↓ in collections header → select `.json` file
+- Export workspace: click ↑ in workspace header
+- Export all: click ↑ Export All in workspace dropdown
+- Import: click ↓ Import in workspace dropdown → select `.json` file
 
 Export format:
 ```json
 {
-  "_exportType": "api-playground-collection",
+  "_exportType": "api-playground-workspace",
   "_version": 1,
-  "collection": {
-    "name": "My API",
-    "variables": [...],
-    "requests": [...]
+  "workspace": {
+    "name": "My Workspace",
+    "collections": [
+      {
+        "name": "My API",
+        "variables": [...],
+        "requests": [...]
+      }
+    ]
   }
 }
 ```
@@ -123,13 +142,13 @@ api-playground/
 │   ├── request-builder.tsx       # URL bar, method, params, headers, body
 │   ├── response-viewer.tsx       # Response body, headers, status
 │   ├── save-modal.tsx            # Save request to collection
-│   ├── sidebar.tsx               # Collections, history, variables tabs
+│   ├── sidebar.tsx               # Workspace selector, collections, history, variables
 │   └── variables-modal.tsx       # Quick variable editor
 ├── lib/
 │   ├── auth.ts                   # Auth.js config
 │   ├── auth-types.ts             # Auth type augmentation
 │   ├── features.ts               # Feature flags
-│   ├── store.ts                  # Zustand store (collections, history, variables)
+│   ├── store.ts                  # Zustand store (workspaces, collections, history, variables)
 │   ├── supabase/                 # Supabase client helpers
 │   └── types.ts                  # TypeScript types
 ├── supabase/

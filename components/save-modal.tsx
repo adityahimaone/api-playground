@@ -4,7 +4,9 @@ import { usePlaygroundStore } from '@/lib/store';
 import { useState } from 'react';
 
 export default function SaveToCollectionModal({ onClose }: { onClose: () => void }) {
-  const { collections, saveToCollection, addCollection, activeRequest } = usePlaygroundStore();
+  const { workspaces, activeWorkspaceId, saveToCollection, addCollection, addWorkspace, activeRequest } = usePlaygroundStore();
+  const ws = workspaces.find(w => w.id === activeWorkspaceId);
+  const collections = ws?.collections || [];
   const [selectedCol, setSelectedCol] = useState('');
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
@@ -13,8 +15,8 @@ export default function SaveToCollectionModal({ onClose }: { onClose: () => void
   const handleSave = () => {
     if (creating && newName.trim()) {
       usePlaygroundStore.getState().addCollection(newName.trim());
-      const newCols = usePlaygroundStore.getState().collections;
-      const newCol = newCols[newCols.length - 1];
+      const updatedWs = usePlaygroundStore.getState().workspaces.find(w => w.id === activeWorkspaceId);
+      const newCol = updatedWs?.collections[updatedWs.collections.length - 1];
       if (newCol) {
         saveToCollection(newCol.id);
         setSaved(true);
@@ -44,6 +46,12 @@ export default function SaveToCollectionModal({ onClose }: { onClose: () => void
           </div>
         ) : (
           <div className="space-y-3">
+            {!activeWorkspaceId && (
+              <p className="text-[11px]" style={{ color: 'var(--warning)' }}>
+                Create a workspace first to save requests.
+              </p>
+            )}
+
             <div>
               <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-faint)' }}>
                 Request Name
@@ -67,6 +75,7 @@ export default function SaveToCollectionModal({ onClose }: { onClose: () => void
                     onChange={e => setSelectedCol(e.target.value)}
                     className="input text-[12px]"
                     style={{ padding: '6px 10px', cursor: 'pointer' }}
+                    disabled={!activeWorkspaceId}
                   >
                     <option value="">Select collection...</option>
                     {collections.map(c => (
@@ -100,7 +109,7 @@ export default function SaveToCollectionModal({ onClose }: { onClose: () => void
 
             <button
               onClick={handleSave}
-              disabled={(!creating && !selectedCol) || (creating && !newName.trim())}
+              disabled={(!creating && !selectedCol) || (creating && !newName.trim()) || !activeWorkspaceId}
               className="btn-primary w-full mt-2"
             >
               Save

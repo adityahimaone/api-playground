@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import {
-  ApiRequest, ApiResponse, Collection, Environment, HistoryEntry,
-  createRequest, createKVPair, KVPair
+  ApiRequest, ApiResponse, Workspace, Collection, Environment, HistoryEntry,
+  createRequest, createKVPair, createWorkspace, KVPair
 } from './types';
 
 interface PlaygroundStore {
@@ -11,13 +11,14 @@ interface PlaygroundStore {
   response: ApiResponse | null;
   loading: boolean;
 
-  // Collections
-  collections: Collection[];
+  // Workspaces (collections nested inside)
+  workspaces: Workspace[];
+  activeWorkspaceId: string | null;
 
-  // History
+  // History (global, not per-workspace)
   history: HistoryEntry[];
 
-  // Environments
+  // Environments (global for now, per-workspace later)
   environments: Environment[];
   activeEnvId: string | null;
 
@@ -28,14 +29,20 @@ interface PlaygroundStore {
   sidebarTab: 'collections' | 'history' | 'variables';
   activeResponseTab: 'body' | 'headers' | 'meta';
 
-  // Actions
+  // ---- Workspace actions ----
+  addWorkspace: (name: string) => void;
+  deleteWorkspace: (id: string) => void;
+  renameWorkspace: (id: string, name: string) => void;
+  setActiveWorkspaceId: (id: string | null) => void;
+
+  // ---- Request actions ----
   updateRequest: (req: Partial<ApiRequest>) => void;
   setActiveRequest: (req: ApiRequest) => void;
   setResponse: (res: ApiResponse | null) => void;
   setLoading: (l: boolean) => void;
   sendRequest: () => Promise<void>;
 
-  // Collection actions
+  // ---- Collection actions (scoped to active workspace) ----
   addCollection: (name: string) => void;
   deleteCollection: (id: string) => void;
   renameCollection: (id: string, name: string) => void;
@@ -43,7 +50,7 @@ interface PlaygroundStore {
   loadFromCollection: (collectionId: string, requestId: string) => void;
   deleteFromCollection: (collectionId: string, requestId: string) => void;
 
-  // Per-collection variables
+  // ---- Per-collection variables ----
   setCollectionVariables: (collectionId: string, vars: KVPair[]) => void;
   addCollectionVariable: (collectionId: string) => void;
   updateCollectionVariable: (collectionId: string, varId: string, field: 'key' | 'value', val: string) => void;
@@ -52,38 +59,85 @@ interface PlaygroundStore {
   activeCollectionId: string | null;
   setActiveCollectionId: (id: string | null) => void;
 
-  // History
+  // ---- History ----
   clearHistory: () => void;
   loadFromHistory: (id: string) => void;
 
-  // Environment actions
+  // ---- Environment actions ----
   addEnvironment: (name: string) => void;
   deleteEnvironment: (id: string) => void;
   updateEnvironment: (id: string, env: Partial<Environment>) => void;
   setActiveEnvId: (id: string | null) => void;
 
-  // Global variables
+  // ---- Global variables ----
   setGlobalVariables: (vars: KVPair[]) => void;
   addGlobalVariable: () => void;
   updateGlobalVariable: (id: string, field: 'key' | 'value', val: string) => void;
   toggleGlobalVariable: (id: string) => void;
   deleteGlobalVariable: (id: string) => void;
 
-  // UI
+  // ---- UI ----
   setSidebarTab: (tab: 'collections' | 'history' | 'variables') => void;
   setActiveResponseTab: (tab: 'body' | 'headers' | 'meta') => void;
 
-  // Variable resolution (scoping: Global > Env > Collection)
+  // ---- Variable resolution (Global > Env > Collection) ----
   resolveVariables: (text: string) => string;
   getActiveVariables: () => KVPair[];
 
-  // Import / Export
-  exportCollection: (collectionId: string) => string;
-  exportAllCollections: () => string;
-  importCollection: (json: string) => boolean;
+  // ---- Import / Export (per-workspace) ----
+  exportWorkspace: (workspaceId: string) => string;
+  exportAllWorkspaces: () => string;
+  importWorkspace: (json: string) => boolean;
 }
 
 const genId = () => Math.random().toString(36).slice(2, 10);
+
+// Helper: operate on active workspace's collections using state snapshot
+function mapActiveWorkspaceCollections(
+  state: PlaygroundStore,
+  fn: (collections: Collection[]) => Collection[]
+): Partial<PlaygroundStore> {
+  const { workspaces, activeWorkspaceId } = state;
+  const ws = workspaces.find(w => w.id === activeWorkspaceId);
+  if (!ws) return {};
+  return {
+    workspaces: workspaces.map(w =>
+      w.id === activeWorkspaceId ? { ...w, collections: fn(w.collections) } : w
+    ),
+  };
+}
+
+// Migration: convert old flat collections to workspace-scoped
+function migrateState(state: any): any {
+  // If workspaces exist already, nothing to migrate
+  if (state.workspaces && state.workspaces.length > 0) return state;
+
+  // Old format: flat collections array at root
+  const collections = state.collections || [];
+  if (collections.length === 0) {
+    // No data to migrate — create default workspace
+    return {
+      ...state,
+      workspaces: [createWorkspace('My Workspace')],
+      activeWorkspaceId: state.activeWorkspaceId || null,
+    };
+  }
+
+  // Migrate old collections into a default workspace
+  const defaultWs = createWorkspace('My Workspace');
+  defaultWs.collections = collections.map((c: any) => ({
+    id: c.id,
+    name: c.name,
+    requests: c.requests || [],
+    variables: c.variables || [],
+  }));
+
+  return {
+    ...state,
+    workspaces: [defaultWs],
+    activeWorkspaceId: defaultWs.id,
+  };
+}
 
 export const usePlaygroundStore = create<PlaygroundStore>()(
   persist(
@@ -91,7 +145,8 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
       activeRequest: createRequest(),
       response: null,
       loading: false,
-      collections: [],
+      workspaces: [createWorkspace('My Workspace')],
+      activeWorkspaceId: null,
       history: [],
       environments: [],
       activeEnvId: null,
@@ -100,6 +155,31 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
       sidebarTab: 'collections',
       activeResponseTab: 'body',
 
+      // ---- Workspace actions ----
+      addWorkspace: (name) => set((s) => {
+        const ws = createWorkspace(name);
+        return {
+          workspaces: [...s.workspaces, ws],
+          activeWorkspaceId: ws.id,
+        };
+      }),
+      deleteWorkspace: (id) => set((s) => {
+        const remaining = s.workspaces.filter(w => w.id !== id);
+        // If deleting the active workspace, switch to first available
+        const newActive = s.activeWorkspaceId === id
+          ? (remaining[0]?.id || null)
+          : s.activeWorkspaceId;
+        return {
+          workspaces: remaining,
+          activeWorkspaceId: newActive,
+        };
+      }),
+      renameWorkspace: (id, name) => set((s) => ({
+        workspaces: s.workspaces.map(w => w.id === id ? { ...w, name } : w),
+      })),
+      setActiveWorkspaceId: (id) => set({ activeWorkspaceId: id, activeCollectionId: null }),
+
+      // ---- Request actions ----
       updateRequest: (req) => set((s) => ({ activeRequest: { ...s.activeRequest, ...req } })),
       setActiveRequest: (req) => set({ activeRequest: req, response: null }),
       setResponse: (res) => set({ response: res }),
@@ -196,79 +276,88 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
         }
       },
 
-      // Collections
-      addCollection: (name) => set((s) => ({
-        collections: [...s.collections, { id: genId(), name, requests: [], variables: [] }],
-      })),
+      // ---- Collection actions (scoped to active workspace) ----
+      addCollection: (name) => set((s) => {
+        const col: Collection = { id: genId(), name, requests: [], variables: [] };
+        return mapActiveWorkspaceCollections(s, cols => [...cols, col]);
+      }),
       deleteCollection: (id) => set((s) => ({
-        collections: s.collections.filter(c => c.id !== id),
+        ...mapActiveWorkspaceCollections(s, cols => cols.filter(c => c.id !== id)),
         activeCollectionId: s.activeCollectionId === id ? null : s.activeCollectionId,
       })),
-      renameCollection: (id, name) => set((s) => ({
-        collections: s.collections.map(c => c.id === id ? { ...c, name } : c),
-      })),
-      saveToCollection: (collectionId) => set((s) => ({
-        collections: s.collections.map(c =>
-          c.id === collectionId
-            ? { ...c, requests: [...c.requests, { ...s.activeRequest, id: genId(), name: s.activeRequest.name || 'Untitled' }] }
-            : c
-        ),
-      })),
+      renameCollection: (id, name) => set((s) =>
+        mapActiveWorkspaceCollections(s, cols => cols.map(c => c.id === id ? { ...c, name } : c))
+      ),
+      saveToCollection: (collectionId) => set((s) => {
+        const newReq = { ...s.activeRequest, id: genId(), name: s.activeRequest.name || 'Untitled' };
+        return mapActiveWorkspaceCollections(s, cols =>
+          cols.map(c => c.id === collectionId ? { ...c, requests: [...c.requests, newReq] } : c)
+        );
+      }),
       loadFromCollection: (collectionId, requestId) => {
-        const col = get().collections.find(c => c.id === collectionId);
+        const { workspaces, activeWorkspaceId } = get();
+        const ws = workspaces.find(w => w.id === activeWorkspaceId);
+        const col = ws?.collections.find(c => c.id === collectionId);
         const req = col?.requests.find(r => r.id === requestId);
         if (req) set({ activeRequest: { ...req }, response: null, activeCollectionId: collectionId });
       },
-      deleteFromCollection: (collectionId, requestId) => set((s) => ({
-        collections: s.collections.map(c =>
-          c.id === collectionId
+      deleteFromCollection: (collectionId, requestId) => set((s) =>
+        mapActiveWorkspaceCollections(s, cols =>
+          cols.map(c => c.id === collectionId
             ? { ...c, requests: c.requests.filter(r => r.id !== requestId) }
             : c
-        ),
-      })),
+          )
+        )
+      ),
 
-      // Per-collection variables
+      // ---- Per-collection variables ----
       setActiveCollectionId: (id) => set({ activeCollectionId: id }),
-      setCollectionVariables: (collectionId, vars) => set((s) => ({
-        collections: s.collections.map(c => c.id === collectionId ? { ...c, variables: vars } : c),
-      })),
-      addCollectionVariable: (collectionId) => set((s) => ({
-        collections: s.collections.map(c =>
-          c.id === collectionId
+      setCollectionVariables: (collectionId, vars) => set((s) =>
+        mapActiveWorkspaceCollections(s, cols =>
+          cols.map(c => c.id === collectionId ? { ...c, variables: vars } : c)
+        )
+      ),
+      addCollectionVariable: (collectionId) => set((s) =>
+        mapActiveWorkspaceCollections(s, cols =>
+          cols.map(c => c.id === collectionId
             ? { ...c, variables: [...c.variables, createKVPair()] }
             : c
-        ),
-      })),
-      updateCollectionVariable: (collectionId, varId, field, val) => set((s) => ({
-        collections: s.collections.map(c =>
-          c.id === collectionId
+          )
+        )
+      ),
+      updateCollectionVariable: (collectionId, varId, field, val) => set((s) =>
+        mapActiveWorkspaceCollections(s, cols =>
+          cols.map(c => c.id === collectionId
             ? { ...c, variables: c.variables.map(v => v.id === varId ? { ...v, [field]: val } : v) }
             : c
-        ),
-      })),
-      toggleCollectionVariable: (collectionId, varId) => set((s) => ({
-        collections: s.collections.map(c =>
-          c.id === collectionId
+          )
+        )
+      ),
+      toggleCollectionVariable: (collectionId, varId) => set((s) =>
+        mapActiveWorkspaceCollections(s, cols =>
+          cols.map(c => c.id === collectionId
             ? { ...c, variables: c.variables.map(v => v.id === varId ? { ...v, enabled: !v.enabled } : v) }
             : c
-        ),
-      })),
-      deleteCollectionVariable: (collectionId, varId) => set((s) => ({
-        collections: s.collections.map(c =>
-          c.id === collectionId
+          )
+        )
+      ),
+      deleteCollectionVariable: (collectionId, varId) => set((s) =>
+        mapActiveWorkspaceCollections(s, cols =>
+          cols.map(c => c.id === collectionId
             ? { ...c, variables: c.variables.filter(v => v.id !== varId) }
             : c
-        ),
-      })),
+          )
+        )
+      ),
 
-      // History
+      // ---- History ----
       clearHistory: () => set({ history: [] }),
       loadFromHistory: (id) => {
         const entry = get().history.find(h => h.id === id);
         if (entry) set({ activeRequest: { ...entry.request }, response: entry.response });
       },
 
-      // Environments
+      // ---- Environments ----
       addEnvironment: (name) => set((s) => ({
         environments: [...s.environments, { id: genId(), name, variables: [createKVPair()] }],
       })),
@@ -281,7 +370,7 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
       })),
       setActiveEnvId: (id) => set({ activeEnvId: id }),
 
-      // Global variables
+      // ---- Global variables ----
       setGlobalVariables: (vars) => set({ globalVariables: vars }),
       addGlobalVariable: () => set((s) => ({
         globalVariables: [...s.globalVariables, createKVPair()],
@@ -296,18 +385,18 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
         globalVariables: s.globalVariables.filter(v => v.id !== id),
       })),
 
-      // UI
+      // ---- UI ----
       setSidebarTab: (tab) => set({ sidebarTab: tab }),
       setActiveResponseTab: (tab) => set({ activeResponseTab: tab }),
 
-      // Variable resolution: Global > Environment > Collection (last wins)
+      // ---- Variable resolution: Global < Environment < Collection (last wins) ----
       resolveVariables: (text) => {
         if (!text) return text;
-        const { globalVariables, environments, activeEnvId, collections, activeCollectionId } = get();
+        const { globalVariables, environments, activeEnvId, workspaces, activeWorkspaceId, activeCollectionId } = get();
         const activeEnv = environments.find(e => e.id === activeEnvId);
-        const activeCol = collections.find(c => c.id === activeCollectionId);
+        const ws = workspaces.find(w => w.id === activeWorkspaceId);
+        const activeCol = ws?.collections.find(c => c.id === activeCollectionId);
 
-        // Merge order: global < env < collection (collection wins on conflict)
         const allVars = [
           ...globalVariables.filter(v => v.enabled),
           ...(activeEnv?.variables.filter(v => v.enabled) || []),
@@ -316,15 +405,15 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
 
         return text.replace(/\{\{(\s*[\w.-]+\s*)\}\}/g, (_, key) => {
           const trimmed = key.trim();
-          // Last match wins (collection > env > global)
           const matches = allVars.filter(vv => vv.key === trimmed);
           return matches.length > 0 ? matches[matches.length - 1].value : `{{${trimmed}}}`;
         });
       },
       getActiveVariables: () => {
-        const { globalVariables, environments, activeEnvId, collections, activeCollectionId } = get();
+        const { globalVariables, environments, activeEnvId, workspaces, activeWorkspaceId, activeCollectionId } = get();
         const activeEnv = environments.find(e => e.id === activeEnvId);
-        const activeCol = collections.find(c => c.id === activeCollectionId);
+        const ws = workspaces.find(w => w.id === activeWorkspaceId);
+        const activeCol = ws?.collections.find(c => c.id === activeCollectionId);
         return [
           ...globalVariables.filter(v => v.enabled),
           ...(activeEnv?.variables.filter(v => v.enabled) || []),
@@ -332,61 +421,86 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
         ];
       },
 
-      // Import / Export
-      exportCollection: (collectionId) => {
-        const col = get().collections.find(c => c.id === collectionId);
-        if (!col) return '';
+      // ---- Import / Export (per-workspace) ----
+      exportWorkspace: (workspaceId) => {
+        const ws = get().workspaces.find(w => w.id === workspaceId);
+        if (!ws) return '';
         return JSON.stringify({
-          _exportType: 'api-playground-collection',
+          _exportType: 'api-playground-workspace',
           _version: 1,
           exportedAt: new Date().toISOString(),
-          collection: {
-            name: col.name,
-            variables: col.variables,
-            requests: col.requests,
-          },
+          workspace: { name: ws.name, collections: ws.collections },
         }, null, 2);
       },
-      exportAllCollections: () => {
-        const { collections } = get();
+      exportAllWorkspaces: () => {
+        const { workspaces } = get();
         return JSON.stringify({
-          _exportType: 'api-playground-collections',
+          _exportType: 'api-playground-workspaces',
           _version: 1,
           exportedAt: new Date().toISOString(),
-          collections: collections.map(c => ({
-            name: c.name,
-            variables: c.variables,
-            requests: c.requests,
-          })),
+          workspaces: workspaces.map(w => ({ name: w.name, collections: w.collections })),
         }, null, 2);
       },
-      importCollection: (json) => {
+      importWorkspace: (json) => {
         try {
           const data = JSON.parse(json);
-          if (data._exportType === 'api-playground-collection') {
-            // Single collection import
-            const col = data.collection;
+          if (data._exportType === 'api-playground-workspace') {
+            const ws = createWorkspace(data.workspace?.name || 'Imported Workspace');
+            ws.collections = (data.workspace?.collections || []).map((c: any) => ({
+              id: genId(),
+              name: c.name || 'Imported Collection',
+              variables: c.variables || [],
+              requests: c.requests || [],
+            }));
             set((s) => ({
-              collections: [...s.collections, {
-                id: genId(),
-                name: col.name || 'Imported Collection',
-                variables: col.variables || [],
-                requests: col.requests || [],
-              }],
+              workspaces: [...s.workspaces, ws],
+              activeWorkspaceId: ws.id,
             }));
             return true;
-          } else if (data._exportType === 'api-playground-collections') {
-            // Multiple collections import
+          } else if (data._exportType === 'api-playground-workspaces') {
             set((s) => ({
-              collections: [
-                ...s.collections,
-                ...((data.collections || []).map((c: any) => ({
-                  id: genId(),
-                  name: c.name || 'Imported Collection',
-                  variables: c.variables || [],
-                  requests: c.requests || [],
-                }))),
+              workspaces: [
+                ...s.workspaces,
+                ...((data.workspaces || []).map((w: any) => {
+                  const ws = createWorkspace(w.name || 'Imported Workspace');
+                  ws.collections = (w.collections || []).map((c: any) => ({
+                    id: genId(),
+                    name: c.name || 'Imported Collection',
+                    variables: c.variables || [],
+                    requests: c.requests || [],
+                  }));
+                  return ws;
+                })),
               ],
+            }));
+            return true;
+          }
+          // Backward compat: old single-collection export
+          if (data._exportType === 'api-playground-collection') {
+            const ws = createWorkspace('Imported');
+            ws.collections = [{
+              id: genId(),
+              name: data.collection?.name || 'Imported Collection',
+              variables: data.collection?.variables || [],
+              requests: data.collection?.requests || [],
+            }];
+            set((s) => ({
+              workspaces: [...s.workspaces, ws],
+              activeWorkspaceId: ws.id,
+            }));
+            return true;
+          }
+          if (data._exportType === 'api-playground-collections') {
+            const ws = createWorkspace('Imported');
+            ws.collections = (data.collections || []).map((c: any) => ({
+              id: genId(),
+              name: c.name || 'Imported Collection',
+              variables: c.variables || [],
+              requests: c.requests || [],
+            }));
+            set((s) => ({
+              workspaces: [...s.workspaces, ws],
+              activeWorkspaceId: ws.id,
             }));
             return true;
           }
@@ -396,6 +510,15 @@ export const usePlaygroundStore = create<PlaygroundStore>()(
         }
       },
     }),
-    { name: 'api-playground-store' }
+    {
+      name: 'api-playground-store',
+      version: 2,
+      migrate: (persisted: any, version: number) => {
+        if (version < 2) {
+          return migrateState(persisted);
+        }
+        return persisted;
+      },
+    }
   )
 );
