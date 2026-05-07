@@ -40,6 +40,7 @@ export default function Sidebar() {
     expandedNodeIds, toggleExpanded,
     contextMenu, showContextMenu, hideContextMenu,
     openTab, activeTabId, closeTab,
+    activeVariableScopes, toggleVariableScope,
   } = useUIStore();
   const { entries: historyEntries, clearHistory, loadEntries } = useHistoryStore();
 
@@ -501,7 +502,7 @@ export default function Sidebar() {
         {sidebarTab === 'variables' && (
           <div>
             <p className="text-[11px] mb-3" style={{ color: 'var(--text-faint)' }}>
-              Use {'{{variable_name}}'} in URL, headers, body, or auth. Scope: Global &lt; Environment &lt; Collection (last wins).
+              Use {'{{variable_name}}'} in URL, headers, body, or auth. Toggle scopes to control which variables are active.
             </p>
 
             {/* ── Global tab ── */}
@@ -581,7 +582,6 @@ export default function Sidebar() {
 
             {/* ── Scope Active Toggles ── */}
             {(() => {
-              const { activeVariableScopes, toggleVariableScope } = useUIStore();
               const SCOPE_DEFS: { scope: VariableScope; label: string }[] = [
                 { scope: 'global', label: 'Global' },
                 { scope: 'environment', label: 'Env' },
