@@ -11,7 +11,9 @@ import {
   KVPair,
   RequestEntity,
   createKVPair,
+  createVariableEntity,
   HistoryEntry,
+  VariableEntity,
 } from '@/lib/entities';
 import { resolveVariables, resolveUrlWithParams, ResolveContext, extractVariables, getMissingVariables, previewResolved } from '@/lib/services/variable-resolver.service';
 import { resolveAuth } from '@/lib/services/auth-resolver.service';
@@ -19,7 +21,7 @@ import { executeRequest } from '@/lib/services/request-executor.service';
 import { requestRepository } from '@/lib/repositories/request.repository';
 import { historyRepository } from '@/lib/repositories/history.repository';
 import { variableRepository } from '@/lib/repositories/variable.repository';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 export default function RequestBuilder() {
   const {
@@ -27,11 +29,28 @@ export default function RequestBuilder() {
     setLoading, setResponse, loading, response,
   } = useUIStore();
   const { getRequest, getResponses } = useRequestStore();
-  const { treeNodes } = useCollectionStore();
+  const { treeNodes, getNodeChildren } = useCollectionStore();
   const { addEntry } = useHistoryStore();
   const [reqTab, setReqTab] = useState<'params' | 'headers' | 'body' | 'auth'>('params');
   const sendFnRef = useRef<() => void>(() => {});
   const [urlPreview, setUrlPreview] = useState<{ resolved: string; missing: string[] } | null>(null);
+
+  // ── Feature 4: Local variables ──
+  const [localVariables, setLocalVariables] = useState<VariableEntity[]>([]);
+  const [showLocalVars, setShowLocalVars] = useState(false);
+  const [newLocalKey, setNewLocalKey] = useState('');
+  const [newLocalValue, setNewLocalValue] = useState('');
+
+  // ── Feature 5: Autocomplete state ──
+  const [autocomplete, setAutocomplete] = useState<{
+    visible: boolean;
+    query: string;
+    suggestions: VariableEntity[];
+    selectedIndex: number;
+  }>({ visible: false, query: '', suggestions: [], selectedIndex: 0 });
+
+  // ── All available variables for autocomplete ──
+  const [allVariables, setAllVariables] = useState<VariableEntity[]>([]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
 
@@ -67,6 +86,46 @@ export default function RequestBuilder() {
     return () => clearTimeout(timer);
   }, [merged?.url, variableVersion]);
 
+  // ── Load local variables for current tab ──
+  useEffect(() => {
+    if (!activeTabId) {
+      setLocalVariables([]);
+      return;
+    }
+    const loadLocal = async () => {
+      const vars = await variableRepository.getByScope('local', activeTabId);
+      setLocalVariables(vars);
+    };
+    loadLocal();
+  }, [activeTabId]);
+
+  // ── Load all variables for autocomplete ──
+  useEffect(() => {
+    const loadAll = async () => {
+      const globalVars = await variableRepository.getByScope('global');
+      const activeEnvId = useUIStore.getState().activeEnvId;
+      const envVars = activeEnvId ? await variableRepository.getByScope('environment', activeEnvId) : [];
+
+      // Collection variables — find parent collection of current request
+      let collVars: VariableEntity[] = [];
+      if (merged?.url) {
+        // Try to find which collection the request belongs to
+        for (const rootId of Object.values(treeNodes).filter(n => n.parentId === null && n.type === 'collection').map(n => n.id)) {
+          const vars = await variableRepository.getByScope('collection', rootId);
+          collVars = [...collVars, ...vars];
+        }
+      }
+
+      // Local variables for current tab
+      const localVars = activeTabId
+        ? await variableRepository.getByScope('local', activeTabId)
+        : [];
+
+      setAllVariables([...localVars, ...envVars, ...collVars, ...globalVars]);
+    };
+    loadAll();
+  }, [variableVersion, activeTabId, treeNodes]);
+
   const update = (changes: Partial<RequestEntity>) => {
     if (activeTab) updateDraft(activeTab.id, changes);
   };
@@ -81,9 +140,20 @@ export default function RequestBuilder() {
       const globalVars = await variableRepository.getByScope('global');
       const activeEnvId = useUIStore.getState().activeEnvId;
       const envVars = activeEnvId ? await variableRepository.getByScope('environment', activeEnvId) : [];
-      // TODO: collection vars when collection-level variables are implemented
+      // Collection vars
+      let collVars: VariableEntity[] = [];
+      for (const rootId of Object.values(treeNodes).filter(n => n.parentId === null && n.type === 'collection').map(n => n.id)) {
+        const vars = await variableRepository.getByScope('collection', rootId);
+        collVars = [...collVars, ...vars];
+      }
+      // Local vars for current tab
+      const localVars = activeTabId
+        ? await variableRepository.getByScope('local', activeTabId)
+        : [];
 
       const varContext: ResolveContext = {
+        localVariables: localVars,
+        collectionVariables: collVars,
         globalVariables: globalVars,
         environmentVariables: envVars,
       };
@@ -171,6 +241,89 @@ export default function RequestBuilder() {
     }
   };
 
+  // ── Feature 4: Local variable CRUD ──
+  const addLocalVariable = async () => {
+    if (!activeTabId || !newLocalKey.trim()) return;
+    const newVar = createVariableEntity(newLocalKey.trim(), newLocalValue, 'local', activeTabId);
+    await variableRepository.create(newVar);
+    setLocalVariables((prev) => [...prev, newVar]);
+    setNewLocalKey('');
+    setNewLocalValue('');
+    document.dispatchEvent(new CustomEvent('variables:changed'));
+  };
+
+  const updateLocalVariable = async (id: string, changes: Partial<VariableEntity>) => {
+    await variableRepository.update(id, changes);
+    setLocalVariables((prev) => prev.map((v) => v.id === id ? { ...v, ...changes } : v));
+    document.dispatchEvent(new CustomEvent('variables:changed'));
+  };
+
+  const deleteLocalVariable = async (id: string) => {
+    await variableRepository.delete(id);
+    setLocalVariables((prev) => prev.filter((v) => v.id !== id));
+    document.dispatchEvent(new CustomEvent('variables:changed'));
+  };
+
+  // ── Feature 5: Autocomplete handlers ──
+  const handleUrlChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    update({ url: value });
+
+    // Check if user just typed "{{" — show autocomplete
+    const lastDoubleBrace = value.lastIndexOf('{{');
+    if (lastDoubleBrace >= 0) {
+      // Check if there's a closing "}}" after the opening
+      const afterOpen = value.slice(lastDoubleBrace + 2);
+      const closingIndex = afterOpen.indexOf('}}');
+      if (closingIndex === -1) {
+        // No closing yet — show autocomplete
+        const query = afterOpen;
+        const filtered = allVariables.filter(
+          v => v.enabled && v.key.trim() && v.key.toLowerCase().includes(query.toLowerCase())
+        ).slice(0, 10);
+        setAutocomplete({ visible: true, query, suggestions: filtered, selectedIndex: 0 });
+        return;
+      }
+    }
+    setAutocomplete({ visible: false, query: '', suggestions: [], selectedIndex: 0 });
+  }, [allVariables, update]);
+
+  const selectAutocomplete = useCallback((varName: string) => {
+    if (!merged?.url) return;
+    const lastDoubleBrace = merged.url.lastIndexOf('{{');
+    if (lastDoubleBrace >= 0) {
+      const before = merged.url.slice(0, lastDoubleBrace + 2);
+      const newValue = before + varName + '}}';
+      update({ url: newValue });
+    }
+    setAutocomplete({ visible: false, query: '', suggestions: [], selectedIndex: 0 });
+  }, [merged?.url, update]);
+
+  const handleUrlKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (autocomplete.visible) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setAutocomplete(prev => ({
+          ...prev,
+          selectedIndex: Math.min(prev.selectedIndex + 1, prev.suggestions.length - 1),
+        }));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setAutocomplete(prev => ({
+          ...prev,
+          selectedIndex: Math.max(prev.selectedIndex - 1, 0),
+        }));
+      } else if (e.key === 'Enter' && autocomplete.suggestions.length > 0) {
+        e.preventDefault();
+        selectAutocomplete(autocomplete.suggestions[autocomplete.selectedIndex].key);
+      } else if (e.key === 'Escape') {
+        setAutocomplete({ visible: false, query: '', suggestions: [], selectedIndex: 0 });
+      }
+    } else if (e.key === 'Enter' && !loading) {
+      handleSend();
+    }
+  }, [autocomplete, selectAutocomplete, loading, handleSend]);
+
   if (!activeTab || !merged) {
     return (
       <div className="flex-1 flex items-center justify-center" style={{ color: 'var(--text-faint)' }}>
@@ -213,16 +366,82 @@ export default function RequestBuilder() {
           ))}
         </select>
 
-        {/* URL input */}
-        <input
-          type="text"
-          value={merged.url || ''}
-          onChange={(e) => update({ url: e.target.value })}
-          onKeyDown={(e) => e.key === 'Enter' && !loading && handleSend()}
-          placeholder="https://api.example.com/endpoint  (use {{variable}} for dynamic values)"
-          className="input flex-1"
-          style={{ fontFamily: 'var(--font-mono)', fontSize: '13px' }}
-        />
+        {/* URL input with autocomplete */}
+        <div className="flex-1 relative">
+          <input
+            type="text"
+            value={merged.url || ''}
+            onChange={handleUrlChange}
+            onKeyDown={handleUrlKeyDown}
+            placeholder="https://api.example.com/endpoint  (use {{variable}} for dynamic values)"
+            className="input w-full"
+            style={{ fontFamily: 'var(--font-mono)', fontSize: '13px' }}
+            autoComplete="off"
+          />
+
+          {/* Autocomplete dropdown */}
+          {autocomplete.visible && autocomplete.suggestions.length > 0 && (
+            <div
+              className="absolute z-50 mt-1 rounded-lg overflow-hidden"
+              style={{
+                top: '100%',
+                left: 0,
+                right: 0,
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border-subtle)',
+                boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+                maxHeight: '200px',
+                overflowY: 'auto',
+              }}
+            >
+              {autocomplete.suggestions.map((v, i) => (
+                <button
+                  key={v.id}
+                  onClick={() => selectAutocomplete(v.key)}
+                  className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-[12px]"
+                  style={{
+                    background: i === autocomplete.selectedIndex ? 'var(--accent-primary-soft)' : 'transparent',
+                    color: 'var(--text-primary)',
+                    cursor: 'pointer',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = i === autocomplete.selectedIndex ? 'var(--accent-primary-soft)' : 'transparent')}
+                >
+                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                    {v.key}
+                  </span>
+                  <span
+                    className="text-[9px] px-1 py-0.5 rounded"
+                    style={{
+                      background: v.scope === 'global' ? '#6b728022' : v.scope === 'environment' ? '#3b82f622' : v.scope === 'collection' ? '#8b5cf622' : '#f9731622',
+                      color: v.scope === 'global' ? '#6b7280' : v.scope === 'environment' ? '#3b82f6' : v.scope === 'collection' ? '#8b5cf6' : '#f97316',
+                    }}
+                  >
+                    {v.scope}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          {autocomplete.visible && autocomplete.suggestions.length === 0 && autocomplete.query.length > 0 && (
+            <div
+              className="absolute z-50 mt-1 rounded-lg overflow-hidden"
+              style={{
+                top: '100%',
+                left: 0,
+                right: 0,
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border-subtle)',
+                boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+                padding: '8px 12px',
+              }}
+            >
+              <span className="text-[11px]" style={{ color: 'var(--text-faint)' }}>
+                No matching variables. Type to create: {'{{' + autocomplete.query + '}}'}
+              </span>
+            </div>
+          )}
+        </div>
 
         {/* Send button */}
         <button
@@ -286,6 +505,92 @@ export default function RequestBuilder() {
           className="text-[12px] font-medium border-none bg-transparent outline-none w-full"
           style={{ color: 'var(--text-muted)' }}
         />
+      </div>
+
+      {/* ═══ Feature 4: Local Variables (collapsible) ═══ */}
+      <div className="px-4 pb-2">
+        <button
+          onClick={() => setShowLocalVars(!showLocalVars)}
+          className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider"
+          style={{ color: 'var(--text-faint)', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
+        >
+          <span>{showLocalVars ? '▾' : '▸'}</span>
+          <span>Local Variables</span>
+          {localVariables.length > 0 && (
+            <span
+              className="text-[9px] px-1 rounded-full"
+              style={{ background: '#f9731622', color: '#f97316' }}
+            >
+              {localVariables.length}
+            </span>
+          )}
+        </button>
+        {showLocalVars && (
+          <div className="mt-2 space-y-1">
+            <div className="flex gap-1 text-[10px] font-semibold uppercase tracking-wider items-center" style={{ color: 'var(--text-faint)' }}>
+              <span style={{ flex: 1 }}>Key</span>
+              <span style={{ flex: 1 }}>Value</span>
+              <span style={{ width: '22px', flexShrink: 0 }}></span>
+              <span style={{ width: '22px', flexShrink: 0 }}></span>
+            </div>
+            {localVariables.map((v) => (
+              <div key={v.id} className="flex gap-1 items-center">
+                <input
+                  value={v.key}
+                  onChange={(e) => updateLocalVariable(v.id, { key: e.target.value })}
+                  placeholder="var_name"
+                  className="input text-[12px]"
+                  style={{ padding: '4px 6px', fontFamily: 'var(--font-mono)', flex: 1, opacity: v.enabled ? 1 : 0.4 }}
+                />
+                <input
+                  value={v.currentValue}
+                  onChange={(e) => updateLocalVariable(v.id, { currentValue: e.target.value })}
+                  placeholder="value"
+                  className="input text-[12px]"
+                  style={{ padding: '4px 6px', fontFamily: 'var(--font-mono)', flex: 1, opacity: v.enabled ? 1 : 0.4 }}
+                />
+                <button
+                  onClick={() => updateLocalVariable(v.id, { enabled: !v.enabled })}
+                  className="btn-icon"
+                  style={{ width: '22px', height: '22px', fontSize: '10px', color: v.enabled ? 'var(--success)' : 'var(--text-faint)' }}
+                >
+                  {v.enabled ? '✓' : '○'}
+                </button>
+                <button
+                  onClick={() => deleteLocalVariable(v.id)}
+                  className="btn-icon"
+                  style={{ width: '22px', height: '22px', fontSize: '10px', color: 'var(--danger)' }}
+                >✕</button>
+              </div>
+            ))}
+            {/* Add local variable inline */}
+            <div className="flex gap-1 items-center">
+              <input
+                value={newLocalKey}
+                onChange={(e) => setNewLocalKey(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && newLocalKey.trim()) addLocalVariable(); }}
+                placeholder="new_var"
+                className="input text-[12px]"
+                style={{ padding: '4px 6px', fontFamily: 'var(--font-mono)', flex: 1 }}
+              />
+              <input
+                value={newLocalValue}
+                onChange={(e) => setNewLocalValue(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && newLocalKey.trim()) addLocalVariable(); }}
+                placeholder="value"
+                className="input text-[12px]"
+                style={{ padding: '4px 6px', fontFamily: 'var(--font-mono)', flex: 1 }}
+              />
+              <button
+                onClick={addLocalVariable}
+                disabled={!newLocalKey.trim()}
+                className="btn-icon"
+                style={{ width: '22px', height: '22px', fontSize: '12px', color: newLocalKey.trim() ? 'var(--accent-primary)' : 'var(--text-faint)' }}
+              >+</button>
+              <span style={{ width: '22px', flexShrink: 0 }}></span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}

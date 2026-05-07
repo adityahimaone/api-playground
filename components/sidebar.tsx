@@ -13,6 +13,7 @@ import {
   VariableEntity,
   createVariableEntity,
   Environment,
+  VariableScope,
 } from '@/lib/entities';
 import { importPostmanCollection } from '@/lib/services/import-postman.service';
 import { exportToPostman } from '@/lib/services/export-postman.service';
@@ -47,6 +48,7 @@ export default function Sidebar() {
   const [selectedEnvTab, setSelectedEnvTab] = useState<string>('global');
   const [newEnvName, setNewEnvName] = useState('');
   const [envVariables, setEnvVariables] = useState<VariableEntity[]>([]);
+  const [revealedSecrets, setRevealedSecrets] = useState<Set<string>>(new Set());
 
   // Editing state
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
@@ -71,13 +73,17 @@ export default function Sidebar() {
       if (selectedEnvTab === 'global') {
         const vars = await variableRepository.getByScope('global');
         setEnvVariables(vars);
+      } else if (selectedEnvTab.startsWith('collection:')) {
+        const collId = selectedEnvTab.slice('collection:'.length);
+        const vars = await variableRepository.getByScope('collection', collId);
+        setEnvVariables(vars);
       } else {
         const vars = await variableRepository.getByScope('environment', selectedEnvTab);
         setEnvVariables(vars);
       }
     };
     loadVariables();
-  }, [selectedEnvTab, environments]);
+  }, [selectedEnvTab, environments, treeNodes]);
 
   // Load history from Dexie on mount
   useEffect(() => {
@@ -286,8 +292,17 @@ export default function Sidebar() {
   const notifyVariablesChanged = () => document.dispatchEvent(new CustomEvent('variables:changed'));
 
   const addVariable = async () => {
-    const scope = selectedEnvTab === 'global' ? 'global' : 'environment';
-    const scopeId = selectedEnvTab === 'global' ? undefined : selectedEnvTab;
+    let scope: VariableScope = 'global';
+    let scopeId: string | undefined = undefined;
+    if (selectedEnvTab === 'global') {
+      scope = 'global';
+    } else if (selectedEnvTab.startsWith('collection:')) {
+      scope = 'collection';
+      scopeId = selectedEnvTab.slice('collection:'.length);
+    } else {
+      scope = 'environment';
+      scopeId = selectedEnvTab;
+    }
     const newVar = createVariableEntity('', '', scope, scopeId);
     await variableRepository.create(newVar);
     setEnvVariables((prev) => [...prev, newVar]);
@@ -306,7 +321,27 @@ export default function Sidebar() {
     notifyVariablesChanged();
   };
 
+  const toggleSecretReveal = (varId: string) => {
+    setRevealedSecrets((prev) => {
+      const next = new Set(prev);
+      if (next.has(varId)) next.delete(varId);
+      else next.add(varId);
+      return next;
+    });
+  };
+
   const activeEnv = environments.find((e) => e.id === activeEnvId);
+
+  // Helper to get tab label
+  const getTabLabel = () => {
+    if (selectedEnvTab === 'global') return 'Global';
+    if (selectedEnvTab.startsWith('collection:')) {
+      const collId = selectedEnvTab.slice('collection:'.length);
+      return treeNodes[collId]?.name || 'Collection';
+    }
+    const env = environments.find(e => e.id === selectedEnvTab);
+    return env?.name || selectedEnvTab;
+  };
 
   // ═══ Render ═══
   return (
@@ -474,73 +509,148 @@ export default function Sidebar() {
         {/* ═══ VARIABLES TAB ═══ */}
         {sidebarTab === 'variables' && (
           <div>
-            <p className="text-[11px] mb-4" style={{ color: 'var(--text-faint)' }}>
+            <p className="text-[11px] mb-3" style={{ color: 'var(--text-faint)' }}>
               Use {'{{variable_name}}'} in URL, headers, body, or auth. Scope: Global &lt; Environment &lt; Collection (last wins).
             </p>
-            <div className="flex gap-1 mb-4 flex-wrap">
+
+            {/* ── Global tab ── */}
+            <div className="mb-3">
               <button
                 onClick={() => setSelectedEnvTab('global')}
                 className={`pill ${selectedEnvTab === 'global' ? 'active' : ''}`}
               >
                 Global
               </button>
-              {environments.map((env) => (
-                <div key={env.id} className="flex items-center gap-0.5">
-                  <button
-                    onClick={() => { setSelectedEnvTab(env.id); setActiveEnvId(env.id); useUIStore.setState({ activeEnvId: env.id }); notifyVariablesChanged(); }}
-                    className={`pill ${selectedEnvTab === env.id ? 'active' : ''}`}
-                  >
-                    {env.name}
-                  </button>
-                  <button
-                    onClick={() => deleteEnv(env.id)}
-                    className="btn-icon"
-                    style={{ width: '18px', height: '18px', fontSize: '9px', color: 'var(--danger)' }}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-              <div className="flex items-center gap-1 ml-1">
-                <input
-                  value={newEnvName}
-                  onChange={(e) => setNewEnvName(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') addEnv(); }}
-                  placeholder="New env..."
-                  className="input text-[11px]"
-                  style={{ padding: '3px 8px', width: '110px' }}
-                />
-                <button
-                  onClick={addEnv}
-                  className="btn-icon"
-                  style={{ width: '22px', height: '22px', fontSize: '14px', color: 'var(--accent-primary)' }}
-                >
-                  +
-                </button>
-              </div>
             </div>
+
+            {/* ── Environment section ── */}
+            {environments.length > 0 && (
+              <div className="mb-3">
+                <span className="text-[9px] font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-faint)' }}>
+                  Environments
+                </span>
+                <div className="flex gap-1 flex-wrap">
+                  {environments.map((env) => (
+                    <div key={env.id} className="flex items-center gap-0.5">
+                      <button
+                        onClick={() => { setSelectedEnvTab(env.id); setActiveEnvId(env.id); useUIStore.setState({ activeEnvId: env.id }); notifyVariablesChanged(); }}
+                        className={`pill ${selectedEnvTab === env.id ? 'active' : ''}`}
+                      >
+                        {env.name}
+                      </button>
+                      <button
+                        onClick={() => deleteEnv(env.id)}
+                        className="btn-icon"
+                        style={{ width: '18px', height: '18px', fontSize: '9px', color: 'var(--danger)' }}
+                      >✕</button>
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-1 ml-1">
+                    <input
+                      value={newEnvName}
+                      onChange={(e) => setNewEnvName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') addEnv(); }}
+                      placeholder="New env..."
+                      className="input text-[11px]"
+                      style={{ padding: '3px 8px', width: '100px' }}
+                    />
+                    <button
+                      onClick={addEnv}
+                      className="btn-icon"
+                      style={{ width: '22px', height: '22px', fontSize: '14px', color: 'var(--accent-primary)' }}
+                    >+</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Collection section ── */}
+            {(() => {
+              const collections = getNodeChildren(null).filter(n => n.type === 'collection');
+              if (collections.length === 0) return null;
+              return (
+                <div className="mb-3">
+                  <span className="text-[9px] font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-faint)' }}>
+                    Collections
+                  </span>
+                  <div className="flex gap-1 flex-wrap">
+                    {collections.map((coll) => (
+                      <button
+                        key={coll.id}
+                        onClick={() => setSelectedEnvTab('collection:' + coll.id)}
+                        className={`pill ${selectedEnvTab === 'collection:' + coll.id ? 'active' : ''}`}
+                      >
+                        {coll.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* ── Variables Table ── */}
             <div className="space-y-1">
-              <div className="flex gap-2 text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-faint)' }}>
-                <span className="flex-1">Key</span>
-                <span className="flex-1">Value</span>
-                <span></span>
+              <div className="flex gap-1 text-[10px] font-semibold uppercase tracking-wider items-center" style={{ color: 'var(--text-faint)' }}>
+                <span style={{ width: '80px', flexShrink: 0 }}>Key</span>
+                <span style={{ width: '70px', flexShrink: 0 }}>Initial</span>
+                <span style={{ flex: 1 }}>Current</span>
+                <span style={{ width: '22px', flexShrink: 0 }}></span>
+                <span style={{ width: '22px', flexShrink: 0 }}></span>
+                <span style={{ width: '22px', flexShrink: 0 }}></span>
               </div>
               {envVariables.map((v) => (
-                <div key={v.id} className="flex gap-2 items-center">
+                <div key={v.id} className="flex gap-1 items-center">
                   <input
                     value={v.key}
                     onChange={(e) => updateVariable(v.id, { key: e.target.value })}
                     placeholder="variable_name"
-                    className="input text-[12px] flex-1"
-                    style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4 }}
+                    className="input text-[12px]"
+                    style={{ padding: '5px 6px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, width: '80px', flexShrink: 0 }}
                   />
                   <input
-                    value={v.currentValue}
-                    onChange={(e) => updateVariable(v.id, { currentValue: e.target.value })}
-                    placeholder="value"
-                    className="input text-[12px] flex-1"
-                    style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4 }}
+                    value={v.initialValue}
+                    onChange={(e) => updateVariable(v.id, { initialValue: e.target.value })}
+                    placeholder="initial"
+                    className="input text-[12px]"
+                    style={{ padding: '5px 6px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 0.6 : 0.35, width: '70px', flexShrink: 0 }}
                   />
+                  <div className="flex items-center flex-1 min-w-0">
+                    {v.secret && !revealedSecrets.has(v.id) ? (
+                      <input
+                        value="********"
+                        readOnly
+                        className="input text-[12px]"
+                        style={{ padding: '5px 6px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, flex: 1 }}
+                      />
+                    ) : (
+                      <input
+                        value={v.currentValue}
+                        onChange={(e) => updateVariable(v.id, { currentValue: e.target.value })}
+                        placeholder="value"
+                        className="input text-[12px]"
+                        style={{ padding: '5px 6px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, flex: 1 }}
+                      />
+                    )}
+                  </div>
+                  <button
+                    onClick={() => updateVariable(v.id, { secret: !v.secret })}
+                    className="btn-icon"
+                    style={{ width: '22px', height: '22px', fontSize: '10px', color: v.secret ? 'var(--warning)' : 'var(--text-faint)' }}
+                    title={v.secret ? 'Mark as not secret' : 'Mark as secret'}
+                  >
+                    {v.secret ? '🔒' : '🔓'}
+                  </button>
+                  {v.secret && (
+                    <button
+                      onClick={() => toggleSecretReveal(v.id)}
+                      className="btn-icon"
+                      style={{ width: '22px', height: '22px', fontSize: '10px', color: 'var(--text-muted)' }}
+                      title={revealedSecrets.has(v.id) ? 'Hide value' : 'Reveal value'}
+                    >
+                      {revealedSecrets.has(v.id) ? '👁‍🗨' : '👁'}
+                    </button>
+                  )}
+                  {!v.secret && <span style={{ width: '22px', flexShrink: 0 }}></span>}
                   <div className="flex items-center gap-0.5">
                     <button
                       onClick={() => updateVariable(v.id, { enabled: !v.enabled })}
@@ -553,15 +663,17 @@ export default function Sidebar() {
                       onClick={() => deleteVariable(v.id)}
                       className="btn-icon"
                       style={{ width: '22px', height: '22px', fontSize: '10px', color: 'var(--danger)' }}
-                    >
-                      ✕
-                    </button>
+                    >✕</button>
                   </div>
                 </div>
               ))}
               {envVariables.length === 0 && (
                 <p className="text-[11px]" style={{ color: 'var(--text-faint)' }}>
-                  {selectedEnvTab === 'global' ? 'No global variables yet.' : 'No variables in this environment yet.'}
+                  {selectedEnvTab === 'global'
+                    ? 'No global variables yet.'
+                    : selectedEnvTab.startsWith('collection:')
+                      ? 'No variables in this collection yet.'
+                      : 'No variables in this environment yet.'}
                 </p>
               )}
               <button

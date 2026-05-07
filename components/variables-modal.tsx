@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Environment, VariableEntity, createEnvironment, createVariableEntity } from '@/lib/entities';
+import { Environment, VariableEntity, createEnvironment, createVariableEntity, VariableScope } from '@/lib/entities';
 import { environmentRepository } from '@/lib/repositories/environment.repository';
 import { variableRepository } from '@/lib/repositories/variable.repository';
 
@@ -11,6 +11,7 @@ export default function VariablesModal({ onClose }: { onClose: () => void }) {
   const [selectedTab, setSelectedTab] = useState<string>('global');
   const [newEnvName, setNewEnvName] = useState('');
   const [envVariables, setEnvVariables] = useState<VariableEntity[]>([]);
+  const [revealedSecrets, setRevealedSecrets] = useState<Set<string>>(new Set());
 
   // Load from Dexie
   useEffect(() => {
@@ -56,7 +57,7 @@ export default function VariablesModal({ onClose }: { onClose: () => void }) {
   const notifyVariablesChanged = () => document.dispatchEvent(new CustomEvent('variables:changed'));
 
   const addVariable = async () => {
-    const scope = selectedTab === 'global' ? 'global' : 'environment';
+    const scope: VariableScope = selectedTab === 'global' ? 'global' : 'environment';
     const scopeId = selectedTab === 'global' ? undefined : selectedTab;
     const newVar = createVariableEntity('', '', scope, scopeId);
     await variableRepository.create(newVar);
@@ -76,6 +77,15 @@ export default function VariablesModal({ onClose }: { onClose: () => void }) {
     notifyVariablesChanged();
   };
 
+  const toggleSecretReveal = (varId: string) => {
+    setRevealedSecrets((prev) => {
+      const next = new Set(prev);
+      if (next.has(varId)) next.delete(varId);
+      else next.add(varId);
+      return next;
+    });
+  };
+
   const selectEnv = async (envId: string) => {
     setSelectedTab(envId);
     setActiveEnvId(envId);
@@ -85,7 +95,7 @@ export default function VariablesModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-card w-full max-w-2xl" style={{ padding: '24px' }}>
+      <div className="modal-card w-full max-w-3xl" style={{ padding: '24px' }}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-base font-bold" style={{ color: 'var(--text-primary)' }}>Variables</h2>
           <button onClick={onClose} className="btn-icon" style={{ width: '28px', height: '28px' }}>
@@ -139,42 +149,86 @@ export default function VariablesModal({ onClose }: { onClose: () => void }) {
 
         {/* Variables table */}
         <div className="space-y-1">
-          <div className="kv-row text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-faint)' }}>
-            <span>Key</span>
-            <span>Value</span>
-            <span></span>
+          <div className="flex gap-1 text-[10px] font-semibold uppercase tracking-wider items-center" style={{ color: 'var(--text-faint)' }}>
+            <span style={{ width: '100px', flexShrink: 0 }}>Key</span>
+            <span style={{ width: '100px', flexShrink: 0 }}>Initial</span>
+            <span style={{ flex: 1 }}>Current</span>
+            <span style={{ width: '26px', flexShrink: 0 }}></span>
+            <span style={{ width: '26px', flexShrink: 0 }}></span>
+            <span style={{ width: '26px', flexShrink: 0 }}></span>
+            <span style={{ width: '26px', flexShrink: 0 }}></span>
           </div>
 
           {envVariables.map((v) => (
-            <div key={v.id} className="kv-row">
+            <div key={v.id} className="flex gap-1 items-center">
               <input
                 value={v.key}
                 onChange={(e) => updateVariable(v.id, { key: e.target.value })}
                 placeholder="variable_name"
                 className="input text-[12px]"
-                style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4 }}
+                style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, width: '100px', flexShrink: 0 }}
               />
               <input
-                value={v.currentValue}
-                onChange={(e) => updateVariable(v.id, { currentValue: e.target.value })}
-                placeholder="value"
+                value={v.initialValue}
+                onChange={(e) => updateVariable(v.id, { initialValue: e.target.value })}
+                placeholder="initial value"
                 className="input text-[12px]"
-                style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4 }}
+                style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 0.6 : 0.35, width: '100px', flexShrink: 0 }}
               />
-              <div className="flex items-center gap-0.5">
-                <button
-                  onClick={() => updateVariable(v.id, { enabled: !v.enabled })}
-                  className="btn-icon"
-                  style={{ width: '22px', height: '22px', fontSize: '10px', color: v.enabled ? 'var(--success)' : 'var(--text-faint)' }}
-                >
-                  {v.enabled ? '✓' : '○'}
-                </button>
-                <button
-                  onClick={() => deleteVariable(v.id)}
-                  className="btn-icon"
-                  style={{ width: '22px', height: '22px', fontSize: '10px', color: 'var(--danger)' }}
-                >✕</button>
+              <div className="flex items-center flex-1 min-w-0">
+                {v.secret && !revealedSecrets.has(v.id) ? (
+                  <input
+                    value="********"
+                    readOnly
+                    className="input text-[12px]"
+                    style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, flex: 1 }}
+                  />
+                ) : (
+                  <input
+                    value={v.currentValue}
+                    onChange={(e) => updateVariable(v.id, { currentValue: e.target.value })}
+                    placeholder="current value"
+                    className="input text-[12px]"
+                    style={{ padding: '5px 8px', fontFamily: 'var(--font-mono)', opacity: v.enabled ? 1 : 0.4, flex: 1 }}
+                  />
+                )}
               </div>
+              {/* Secret toggle */}
+              <button
+                onClick={() => updateVariable(v.id, { secret: !v.secret })}
+                className="btn-icon"
+                style={{ width: '26px', height: '26px', fontSize: '11px', color: v.secret ? 'var(--warning)' : 'var(--text-faint)' }}
+                title={v.secret ? 'Mark as not secret' : 'Mark as secret'}
+              >
+                {v.secret ? '🔒' : '🔓'}
+              </button>
+              {/* Reveal button (only for secrets) */}
+              {v.secret ? (
+                <button
+                  onClick={() => toggleSecretReveal(v.id)}
+                  className="btn-icon"
+                  style={{ width: '26px', height: '26px', fontSize: '11px', color: 'var(--text-muted)' }}
+                  title={revealedSecrets.has(v.id) ? 'Hide value' : 'Reveal value'}
+                >
+                  {revealedSecrets.has(v.id) ? '👁‍🗨' : '👁'}
+                </button>
+              ) : (
+                <span style={{ width: '26px', flexShrink: 0 }}></span>
+              )}
+              {/* Enabled toggle */}
+              <button
+                onClick={() => updateVariable(v.id, { enabled: !v.enabled })}
+                className="btn-icon"
+                style={{ width: '26px', height: '26px', fontSize: '11px', color: v.enabled ? 'var(--success)' : 'var(--text-faint)' }}
+              >
+                {v.enabled ? '✓' : '○'}
+              </button>
+              {/* Delete */}
+              <button
+                onClick={() => deleteVariable(v.id)}
+                className="btn-icon"
+                style={{ width: '26px', height: '26px', fontSize: '11px', color: 'var(--danger)' }}
+              >✕</button>
             </div>
           ))}
 
