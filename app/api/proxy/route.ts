@@ -19,6 +19,19 @@ export async function POST(req: NextRequest) {
     delete fetchHeaders['host'];
     delete fetchHeaders['Host'];
 
+    // Auto-detect JSON body and set Content-Type if not already provided
+    const hasContentType = Object.keys(fetchHeaders).some(
+      (k) => k.toLowerCase() === 'content-type'
+    );
+    if (!hasContentType && body && method !== 'GET' && method !== 'HEAD') {
+      try {
+        JSON.parse(body);
+        fetchHeaders['Content-Type'] = 'application/json';
+      } catch {
+        // Not JSON, don't set Content-Type
+      }
+    }
+
     const fetchOptions: RequestInit = {
       method,
       headers: fetchHeaders,
